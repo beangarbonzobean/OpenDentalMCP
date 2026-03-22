@@ -1,0 +1,22 @@
+# Copy to .env on the server and fill in real values (never commit .env).
+
+# Open Dental API Configuration
+OPENDENTAL_API_URL=https://api.opendental.com/api/v1
+OPENDENTAL_DEVELOPER_KEY=YOUR_OPENDENTAL_DEVELOPER_KEY
+OPENDENTAL_CUSTOMER_KEY=YOUR_OPENDENTAL_CUSTOMER_KEY
+
+# Database Configuration
+OPENDENTAL_DB_TYPE=mysql
+OPENDENTAL_DB_SERVER=YOUR_OPENDENTAL_DB_HOST
+OPENDENTAL_DB_DATABASE=opendental
+OPENDENTAL_DB_USERNAME=root
+OPENDENTAL_DB_PASSWORD=
+OPENDENTAL_DB_USE_WINDOWS_AUTH=false
+
+# AtoZ Path (UNC share)
+OPENDENTAL_ATOZ_PATH=\\YOUR_FILE_SERVER\OpenDentImages
+
+# MCP Server Configuration (use 8444 if DEXIS MCP uses 8443 on the same host)
+MCP_HTTP_PORT=8444
+MCP_HTTP_HOST=0.0.0.0
+MCP_USE_HTTPS=true

@@ -1,0 +1,27 @@
+# Local secrets (never commit)
+.env
+.env.*
+!.env.example
+
+# Per-machine config (use config.example.json in repo)
+live/**/config.json
+
+# TLS / keys (deploy from secure store, not git)
+*.pem
+*.key
+*.crt
+
+# Logs and caches
+*.log
+.log/
+__pycache__/
+*.pyc
+
+# OS / editor
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/
+
+# Archives (use Git history instead of zipped snapshots)
+*.zip

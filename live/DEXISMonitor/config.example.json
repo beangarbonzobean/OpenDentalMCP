@@ -1,0 +1,25 @@
+{
+  "dexis_images_path": "\\\\YOUR_FILE_SERVER\\DEXIS Imaging Suite\\Data\\Images",
+  "check_interval": 1,
+  "notifications": {
+    "desktop": true,
+    "email": false,
+    "log_file": true
+  },
+  "database": {
+    "server": "YOUR_SQL_HOST\\\\INSTANCE_NAME",
+    "database": "DEXIS",
+    "use_windows_auth": false,
+    "username": "",
+    "password": ""
+  },
+  "email": {
+    "smtp_server": "",
+    "smtp_port": 587,
+    "smtp_username": "",
+    "smtp_password": "",
+    "to_email": "",
+    "from_email": ""
+  },
+  "log_file": "xray_monitor.log"
+}
