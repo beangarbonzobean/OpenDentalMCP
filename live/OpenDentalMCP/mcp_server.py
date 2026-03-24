@@ -16,7 +16,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from mcp_tools import OpenDentalMCPTools
-from mcp_tools_optimized import OptimizedOpenDentalMCPTools, get_discovery_tools
+try:
+    from mcp_tools_optimized import OptimizedOpenDentalMCPTools, get_discovery_tools
+except ImportError:
+    OptimizedOpenDentalMCPTools = None
+
+    def get_discovery_tools():
+        return []
 
 # Configure logging
 logging.basicConfig(
@@ -34,7 +40,7 @@ class OpenDentalMCPServer:
     """MCP Server for Open Dental API"""
     
     def __init__(self, use_optimized: bool = True):
-        if use_optimized:
+        if use_optimized and OptimizedOpenDentalMCPTools is not None:
             self.tools = OptimizedOpenDentalMCPTools()
         else:
             self.tools = OpenDentalMCPTools()
@@ -108,10 +114,7 @@ class OpenDentalMCPServer:
     def handle_tools_list(self):
         """List available tools"""
         # Get base tools
-        if isinstance(self.tools, OptimizedOpenDentalMCPTools):
-            tools = self.tools.list_tools()
-        else:
-            tools = self.tools.list_tools()
+        tools = self.tools.list_tools()
         
         # Add discovery tools
         discovery_tools = get_discovery_tools()

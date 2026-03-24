@@ -338,6 +338,14 @@ class OpenDentalMCPTools:
                         "patient_id": {
                             "type": "string",
                             "description": "Patient ID (PatNum)"
+                        },
+                        "date_from": {
+                            "type": "string",
+                            "description": "Optional: Start date (YYYY-MM-DD)"
+                        },
+                        "date_to": {
+                            "type": "string",
+                            "description": "Optional: End date (YYYY-MM-DD)"
                         }
                     },
                     "required": ["patient_id"]
@@ -2716,7 +2724,11 @@ class OpenDentalMCPTools:
             elif tool_name == "get_accurate_count":
                 return self._get_accurate_count(arguments.get("resource"), arguments.get("search_params", {}))
             elif tool_name == "get_patient_appointments":
-                return self._get_patient_appointments(arguments.get("patient_id"))
+                return self._get_patient_appointments(
+                    arguments.get("patient_id"),
+                    arguments.get("date_from"),
+                    arguments.get("date_to"),
+                )
             elif tool_name == "get_todays_appointments":
                 return self._get_todays_appointments(arguments.get("provider_id"))
             elif tool_name == "get_upcoming_appointments":
@@ -3075,14 +3087,35 @@ class OpenDentalMCPTools:
         if params.get("patient_id"):
             query_params["PatNum"] = params["patient_id"]
         if params.get("date_from"):
-            query_params["AptDateTime"] = params["date_from"]
+            query_params["dateStart"] = params["date_from"]
+        if params.get("date_to"):
+            query_params["dateEnd"] = params["date_to"]
         if params.get("status"):
             query_params["AptStatus"] = params["status"]
-        
-        result = self._make_request("GET", "/appointments", params=query_params)
+
+        all_appointments = []
+        offset = 0
+
+        # Open Dental API pages appointments in blocks of 100 records via Offset.
+        while True:
+            page_params = dict(query_params)
+            page_params["Offset"] = offset
+            page = self._make_request("GET", "/appointments", params=page_params)
+
+            if not isinstance(page, list):
+                return {
+                    "count": 1,
+                    "appointments": page
+                }
+
+            all_appointments.extend(page)
+            if len(page) < 100:
+                break
+            offset += 100
+
         return {
-            "count": len(result) if isinstance(result, list) else 1,
-            "appointments": result
+            "count": len(all_appointments),
+            "appointments": all_appointments
         }
     
     def _get_provider(self, provider_id: str) -> Dict:
@@ -3233,29 +3266,99 @@ class OpenDentalMCPTools:
                 "error": str(e)
             }
     
-    def _get_patient_appointments(self, patient_id: str) -> Dict:
+    def _get_patient_appointments(self, patient_id: str, date_from: Optional[str] = None, date_to: Optional[str] = None) -> Dict:
         """Get all appointments for a patient"""
-        return self._search_appointments({"patient_id": patient_id})
+        params = {"patient_id": patient_id}
+        if date_from:
+            params["date_from"] = date_from
+        if date_to:
+            params["date_to"] = date_to
+        return self._search_appointments(params)
     
     def _get_todays_appointments(self, provider_id: Optional[str] = None) -> Dict:
         """Get today's appointments"""
         from datetime import datetime
         today = datetime.now().strftime("%Y-%m-%d")
-        params = {"date_from": today, "date_to": today}
+        all_appointments = []
+        offset = 0
+
+        # Open Dental API pages appointments in blocks of 100 records via Offset.
+        while True:
+            page = self._make_request(
+                "GET",
+                "/appointments",
+                params={
+                    "date": today,
+                    "Offset": offset,
+                },
+            )
+
+            if not isinstance(page, list):
+                # Preserve existing behavior shape if API returns non-list payload.
+                return {
+                    "count": 1,
+                    "appointments": page
+                }
+
+            all_appointments.extend(page)
+            if len(page) < 100:
+                break
+            offset += 100
+
         if provider_id:
-            # Note: API might not support provider filter directly, but we'll try
-            params["provider_id"] = provider_id
-        return self._search_appointments(params)
+            all_appointments = [
+                apt for apt in all_appointments
+                if str(apt.get("ProvNum", "")) == str(provider_id)
+            ]
+
+        return {
+            "count": len(all_appointments),
+            "appointments": all_appointments
+        }
     
     def _get_upcoming_appointments(self, days_ahead: int = 7, provider_id: Optional[str] = None) -> Dict:
         """Get upcoming appointments"""
         from datetime import datetime, timedelta
         today = datetime.now()
         end_date = (today + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-        params = {"date_from": today.strftime("%Y-%m-%d"), "date_to": end_date}
+        today_str = today.strftime("%Y-%m-%d")
+
+        all_appointments = []
+        offset = 0
+
+        # Open Dental API pages appointments in blocks of 100 records via Offset.
+        while True:
+            page = self._make_request(
+                "GET",
+                "/appointments",
+                params={
+                    "dateStart": today_str,
+                    "dateEnd": end_date,
+                    "Offset": offset,
+                },
+            )
+
+            if not isinstance(page, list):
+                return {
+                    "count": 1,
+                    "appointments": page
+                }
+
+            all_appointments.extend(page)
+            if len(page) < 100:
+                break
+            offset += 100
+
         if provider_id:
-            params["provider_id"] = provider_id
-        return self._search_appointments(params)
+            all_appointments = [
+                apt for apt in all_appointments
+                if str(apt.get("ProvNum", "")) == str(provider_id)
+            ]
+
+        return {
+            "count": len(all_appointments),
+            "appointments": all_appointments
+        }
     
     def _get_patient_by_phone(self, phone: str) -> Dict:
         """Find patient by phone number"""
@@ -3267,12 +3370,49 @@ class OpenDentalMCPTools:
     
     def _get_appointments_by_date_range(self, start_date: str, end_date: str, provider_id: Optional[str] = None, status: Optional[str] = None) -> Dict:
         """Get appointments by date range"""
-        params = {"date_from": start_date, "date_to": end_date}
+        all_appointments = []
+        offset = 0
+
+        # Open Dental API pages appointments in blocks of 100 records via Offset.
+        while True:
+            page = self._make_request(
+                "GET",
+                "/appointments",
+                params={
+                    "dateStart": start_date,
+                    "dateEnd": end_date,
+                    "Offset": offset,
+                },
+            )
+
+            if not isinstance(page, list):
+                # Preserve existing behavior shape if API returns non-list payload.
+                return {
+                    "count": 1,
+                    "appointments": page
+                }
+
+            all_appointments.extend(page)
+            if len(page) < 100:
+                break
+            offset += 100
+
         if provider_id:
-            params["provider_id"] = provider_id
+            all_appointments = [
+                apt for apt in all_appointments
+                if str(apt.get("ProvNum", "")) == str(provider_id)
+            ]
+
         if status:
-            params["status"] = status
-        return self._search_appointments(params)
+            all_appointments = [
+                apt for apt in all_appointments
+                if str(apt.get("AptStatus", "")).lower() == str(status).lower()
+            ]
+
+        return {
+            "count": len(all_appointments),
+            "appointments": all_appointments
+        }
     
     def _search_patients_by_name(self, first_name: Optional[str] = None, last_name: Optional[str] = None) -> Dict:
         """Search patients by name"""
@@ -3418,13 +3558,47 @@ class OpenDentalMCPTools:
             stats = self._get_statistics()
             today = datetime.now().strftime("%Y-%m-%d")
             todays_appts = self._get_todays_appointments()
+
+            # Use direct SQL counts to avoid REST API 1000-row cap in overview totals.
+            def _safe_sql_count(query: str) -> Optional[int]:
+                result = self._query_database(query, limit=1)
+                if not result.get("success"):
+                    return None
+                rows = result.get("rows", [])
+                if not rows:
+                    return 0
+                first_row = rows[0]
+                if isinstance(first_row, dict):
+                    for key in ("total", "count", "COUNT(*)"):
+                        if key in first_row:
+                            try:
+                                return int(first_row[key])
+                            except Exception:
+                                pass
+                    try:
+                        return int(next(iter(first_row.values())))
+                    except Exception:
+                        return None
+                return None
+
+            total_patients_sql = _safe_sql_count("SELECT COUNT(*) AS total FROM patient")
+            total_appointments_sql = _safe_sql_count("SELECT COUNT(*) AS total FROM appointment")
             
             overview = {
                 "date": today,
                 "statistics": stats,
                 "todays_appointments": todays_appts,
                 "summary": {
-                    "total_patients": stats.get("total_patients", 0),
+                    "total_patients": (
+                        total_patients_sql
+                        if total_patients_sql is not None
+                        else stats.get("total_patients", 0)
+                    ),
+                    "total_appointments": (
+                        total_appointments_sql
+                        if total_appointments_sql is not None
+                        else stats.get("total_appointments", 0)
+                    ),
                     "total_providers": stats.get("total_providers", 0),
                     "total_laboratories": stats.get("total_laboratories", 0),
                     "todays_appointment_count": todays_appts.get("count", 0)
