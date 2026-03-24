@@ -1,0 +1,30 @@
+﻿{
+    "dexis_images_path":  "\\\\localhost\\DEXIS Imaging Suite\\Data\\ImagesTest",
+    "check_interval":  2,
+    "notifications":  {
+                          "desktop":  true,
+                          "email":  false,
+                          "log_file":  true
+                      },
+    "database":  {
+                     "server":  "(local)\\\\DEXIS_DATA",
+                     "database":  "DEXIS_TEST",
+                     "use_windows_auth":  true,
+                     "username":  "",
+                     "password":  ""
+                 },
+    "email":  {
+                  "smtp_server":  "",
+                  "smtp_port":  587,
+                  "smtp_username":  "",
+                  "smtp_password":  "",
+                  "to_email":  "",
+                  "from_email":  ""
+              },
+    "log_file":  "xray_monitor_test.log",
+    "mcp":  {
+                "http_host":  "0.0.0.0",
+                "http_port":  8843,
+                "use_https":  false
+            }
+}

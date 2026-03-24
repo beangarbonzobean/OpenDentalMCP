@@ -1,0 +1,25 @@
+﻿{
+    "opendental":  {
+                       "api_url":  "https://api.opendental.com/api/v1",
+                       "developer_key":  "",
+                       "customer_key":  ""
+                   },
+    "database":  {
+                     "type":  "mysql",
+                     "server":  "localhost",
+                     "database":  "opendental_test",
+                     "username":  "test_user",
+                     "password":  "",
+                     "use_windows_auth":  false,
+                     "atoz_path":  "\\\\localhost\\OpenDentImagesTest"
+                 },
+    "mcp":  {
+                "http_host":  "0.0.0.0",
+                "http_port":  8765,
+                "use_https":  false
+            },
+    "logging":  {
+                    "level":  "INFO",
+                    "log_file":  "opendental_mcp_http_test.log"
+                }
+}

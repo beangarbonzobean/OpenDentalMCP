@@ -5,6 +5,8 @@ Provides AI assistants with access to DEXIS database via HTTP REST API.
 
 import json
 import logging
+import os
+import sys
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from typing import Any, Dict, Optional
@@ -41,12 +43,13 @@ CORS(app)  # Enable CORS for cross-origin requests
 
 # Load config
 def load_config() -> Dict:
-    """Load configuration from config.json."""
+    """Load configuration from MCP_CONFIG_FILE or config.json."""
+    config_file = os.getenv("MCP_CONFIG_FILE", "config.json")
     try:
-        with open('config.json', 'r') as f:
+        with open(config_file, 'r', encoding='utf-8-sig') as f:
             return json.load(f)
     except FileNotFoundError:
-        logger.warning("config.json not found. Using defaults.")
+        logger.warning("%s not found. Using defaults.", config_file)
         return {
             "database": {
                 "server": "(local)\\DEXIS_DATA",
@@ -411,14 +414,17 @@ def mcp_endpoint():
     logger.info(f"Headers: {dict(request.headers)}")
     print(f"[MCP] Headers: {dict(request.headers)}")
     
-    # Handle OPTIONS requests (CORS preflight)
+    # Handle OPTIONS requests (CORS preflight; Claude/browser clients send Accept + MCP headers)
     if request.method == 'OPTIONS':
         logger.info("Handling OPTIONS request")
         response = jsonify({})
         response.headers.add('Access-Control-Allow-Origin', '*')
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        response.headers.add(
+            'Access-Control-Allow-Headers',
+            'Content-Type, Authorization, Accept, Mcp-Session-Id, Mcp-Protocol-Version, Last-Event-ID',
+        )
         response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        return response, 200
+        return response, 204
     
     # Handle GET requests (for browser testing)
     if request.method == 'GET':
@@ -457,6 +463,11 @@ def mcp_endpoint():
         params = data.get("params", {})
         
         logger.info(f"Processing method: {method}")
+
+        # MCP lifecycle notifications (JSON-RPC notification; no id / empty response)
+        if isinstance(method, str) and method.startswith("notifications/"):
+            logger.info(f"MCP notification acknowledged: {method}")
+            return "", 204
         
         # Handle initialization request
         if method == "initialize" or method == "initialize/":
@@ -518,8 +529,17 @@ def mcp_endpoint():
                         "message": result.get("error")
                     }
                 }), 500
+
+        # Streamable HTTP clients (e.g. Claude MCP) send ping; HTTP 404 is reserved for "session not found"
+        elif method == "ping":
+            return jsonify({
+                "jsonrpc": "2.0",
+                "id": data.get("id"),
+                "result": {"status": "pong"},
+            }), 200
         
         else:
+            # Use HTTP 200 for JSON-RPC errors — 404 is interpreted as session terminated by streamable clients
             return jsonify({
                 "jsonrpc": "2.0",
                 "id": data.get("id"),
@@ -527,7 +547,7 @@ def mcp_endpoint():
                     "code": -32601,
                     "message": f"Method '{method}' not found"
                 }
-            }), 404
+            }), 200
             
     except Exception as e:
         logger.error(f"Error in MCP endpoint: {e}", exc_info=True)
@@ -542,18 +562,18 @@ def mcp_endpoint():
 
 
 if __name__ == "__main__":
-    import sys
-    import os
+    # Get host/port from environment first, then command line, then defaults
+    port = int(os.getenv("MCP_HTTP_PORT", sys.argv[1] if len(sys.argv) > 1 else 8443))
+    host = os.getenv("MCP_HTTP_HOST", sys.argv[2] if len(sys.argv) > 2 else "0.0.0.0")
     
-    # Get port from command line or use default
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8443
-    host = sys.argv[2] if len(sys.argv) > 2 else "0.0.0.0"
-    
+    # HTTPS can be explicitly disabled to keep parity with HTTP-only deployments.
+    use_https = os.getenv("MCP_USE_HTTPS", "true").lower() == "true"
+
     # Check for SSL certificates
     cert_file = 'server.crt'
     key_file = 'server.key'
     
-    if os.path.exists(cert_file) and os.path.exists(key_file):
+    if use_https and os.path.exists(cert_file) and os.path.exists(key_file):
         ssl_context = (cert_file, key_file)
         protocol = "https"
         logger.info(f"Starting DEXIS MCP HTTPS Server on {host}:{port}")
@@ -564,8 +584,11 @@ if __name__ == "__main__":
     else:
         ssl_context = None
         protocol = "http"
-        logger.warning("SSL certificates not found! Server will run on HTTP (not secure)")
-        logger.warning("To enable HTTPS, create SSL certificates: server.crt and server.key")
+        if use_https:
+            logger.warning("SSL certificates not found! Server will run on HTTP (not secure)")
+            logger.warning("To enable HTTPS, create SSL certificates: server.crt and server.key")
+        else:
+            logger.info("MCP_USE_HTTPS=false. Starting DEXIS MCP over HTTP.")
         logger.info(f"Starting DEXIS MCP HTTP Server on {host}:{port}")
         logger.info(f"Server URL: http://localhost:{port}")
         logger.info(f"MCP endpoint: http://localhost:{port}/mcp")

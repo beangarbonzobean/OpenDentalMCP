@@ -47,9 +47,25 @@ def health():
     })
 
 
-@app.route('/mcp', methods=['POST'])
+@app.route('/mcp', methods=['GET', 'POST', 'OPTIONS'])
 def handle_mcp_request():
-    """Handle MCP JSON-RPC requests"""
+    """Handle MCP JSON-RPC requests (POST). GET/OPTIONS for client probes and CORS."""
+    if request.method == 'OPTIONS':
+        r = jsonify({})
+        r.headers.add('Access-Control-Allow-Origin', '*')
+        r.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, Mcp-Session-Id')
+        r.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        return r, 204
+
+    if request.method == 'GET':
+        # Avoid 405 when clients probe /mcp (e.g. SSE fallback); RPC is POST-only here.
+        return jsonify({
+            "service": "opendental-mcp-http",
+            "endpoint": "/mcp",
+            "usage": "Send JSON-RPC POST with Content-Type: application/json",
+            "example": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+        }), 200
+
     try:
         data = request.get_json()
         if not data:
@@ -64,6 +80,11 @@ def handle_mcp_request():
         request_id = data.get("id")
         
         logger.debug(f"Received request: {method} with params: {params}")
+
+        # MCP notifications (no response body required; Cursor sends notifications/initialized)
+        if isinstance(method, str) and method.startswith("notifications/"):
+            logger.info(f"MCP notification acknowledged: {method}")
+            return "", 204
         
         # Handle initialize method
         if method == "initialize":

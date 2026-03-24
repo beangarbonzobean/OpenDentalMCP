@@ -14,6 +14,48 @@ from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
+
+def _load_env_from_mcp_config_file() -> None:
+    """Optionally load environment variables from MCP_CONFIG_FILE JSON."""
+    config_file = os.getenv("MCP_CONFIG_FILE", "").strip()
+    if not config_file:
+        return
+
+    config_path = config_file if os.path.isabs(config_file) else os.path.join(os.getcwd(), config_file)
+    if not os.path.exists(config_path):
+        logger.warning("MCP_CONFIG_FILE not found: %s", config_path)
+        return
+
+    try:
+        with open(config_path, "r", encoding="utf-8-sig") as f:
+            config = json.load(f)
+    except Exception as exc:
+        logger.warning("Failed loading MCP_CONFIG_FILE (%s): %s", config_path, exc)
+        return
+
+    opendental_cfg = config.get("opendental", {})
+    db_cfg = config.get("database", {})
+    mcp_cfg = config.get("mcp", {})
+    env_map = {
+        "OPENDENTAL_API_URL": opendental_cfg.get("api_url"),
+        "OPENDENTAL_DEVELOPER_KEY": opendental_cfg.get("developer_key"),
+        "OPENDENTAL_CUSTOMER_KEY": opendental_cfg.get("customer_key"),
+        "OPENDENTAL_DB_TYPE": db_cfg.get("type"),
+        "OPENDENTAL_DB_SERVER": db_cfg.get("server"),
+        "OPENDENTAL_DB_DATABASE": db_cfg.get("database"),
+        "OPENDENTAL_DB_USERNAME": db_cfg.get("username"),
+        "OPENDENTAL_DB_PASSWORD": db_cfg.get("password"),
+        "OPENDENTAL_DB_USE_WINDOWS_AUTH": db_cfg.get("use_windows_auth"),
+        "OPENDENTAL_ATOZ_PATH": db_cfg.get("atoz_path", config.get("atoz_path")),
+        "MCP_HTTP_PORT": mcp_cfg.get("http_port"),
+        "MCP_HTTP_HOST": mcp_cfg.get("http_host"),
+        "MCP_USE_HTTPS": mcp_cfg.get("use_https"),
+    }
+    for key, value in env_map.items():
+        if value is None:
+            continue
+        os.environ[key] = str(value)
+
 # Try to import database libraries (optional)
 try:
     import pyodbc
@@ -33,6 +75,7 @@ class OpenDentalMCPTools:
     """MCP Tools for Open Dental API"""
     
     def __init__(self):
+        _load_env_from_mcp_config_file()
         self.api_url = os.getenv("OPENDENTAL_API_URL", "https://api.opendental.com/api/v1")
         self.developer_key = os.getenv("OPENDENTAL_DEVELOPER_KEY", "")
         self.customer_key = os.getenv("OPENDENTAL_CUSTOMER_KEY", "")

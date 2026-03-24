@@ -6,6 +6,7 @@ Provides AI assistants with access to DEXIS database via Model Context Protocol.
 import asyncio
 import json
 import logging
+import os
 import sys
 from typing import Any, Dict, Optional
 
@@ -51,12 +52,13 @@ logger = logging.getLogger(__name__)
 
 
 def load_config() -> Dict:
-    """Load configuration from config.json."""
+    """Load configuration from MCP_CONFIG_FILE or config.json."""
+    config_file = os.getenv("MCP_CONFIG_FILE", "config.json")
     try:
-        with open('config.json', 'r') as f:
+        with open(config_file, 'r', encoding='utf-8-sig') as f:
             return json.load(f)
     except FileNotFoundError:
-        logger.warning("config.json not found. Using defaults.")
+        logger.warning("%s not found. Using defaults.", config_file)
         return {
             "database": {
                 "server": "(local)\\DEXIS_DATA",

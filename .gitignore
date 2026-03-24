@@ -5,11 +5,17 @@
 
 # Per-machine config (use config.example.json in repo)
 live/**/config.json
+live/OpenDentalMCP/config.prod.json
+live/DEXISMonitor/config.prod.json
 
 # TLS / keys (deploy from secure store, not git)
 *.pem
 *.key
 *.crt
+
+# Python virtual environments (never commit)
+.venv/
+**/.venv/
 
 # Logs and caches
 *.log
