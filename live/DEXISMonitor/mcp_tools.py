@@ -6,6 +6,7 @@ Provides tools for schema discovery, query execution, and pre-built queries.
 import json
 import logging
 import re
+from urllib.parse import unquote
 from typing import Any, Dict, List, Optional, Tuple
 from dexis_db_query import DEXISDatabase
 
@@ -57,6 +58,16 @@ def format_result(rows: List, columns: List[str]) -> str:
         JSON string of results
     """
     try:
+        def normalize_tooth_number(value: Any) -> Any:
+            """Decode URL-encoded tooth lists and remove legacy prefix."""
+            if value is None:
+                return None
+            text = str(value)
+            decoded = unquote(text)
+            if decoded.startswith("teeth="):
+                decoded = decoded[len("teeth="):]
+            return decoded
+
         # Convert rows to dictionaries
         results = []
         for row in rows:
@@ -68,6 +79,8 @@ def format_result(rows: List, columns: List[str]) -> str:
                     value = value.isoformat()
                 elif value is None:
                     value = None
+                if col == "ToothNumber":
+                    value = normalize_tooth_number(value)
                 row_dict[col] = value
             results.append(row_dict)
         
@@ -622,10 +635,16 @@ def get_xray_info(visual_id: int, config: Optional[Dict] = None) -> str:
     
     try:
         # Reuse existing get_xray_info method
-        result = db.get_xray_info(str(visual_id))
+        result = db.get_xray_info(visual_id)
         db.close()
         
         if result:
+            tooth_value = result.get("Teeth")
+            if tooth_value is not None:
+                decoded = unquote(str(tooth_value))
+                if decoded.startswith("teeth="):
+                    decoded = decoded[len("teeth="):]
+                result["Teeth"] = decoded
             return json.dumps(result, indent=2, default=str)
         else:
             return json.dumps({"error": "X-ray not found"})

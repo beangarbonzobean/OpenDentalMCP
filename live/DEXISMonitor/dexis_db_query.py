@@ -114,12 +114,18 @@ class DEXISDatabase:
                     file_id_int = file_id_hex
                 logger.info(f"File ID: {file_id} -> VisualID (hex): {file_id_hex}, ImageNum (decimal): {file_id_int}")
             elif isinstance(file_id, str):
-                # Try hex first, then decimal
-                try:
-                    file_id_hex = int(file_id, 16) if '0x' in file_id.lower() else int(file_id, 16)
-                except ValueError:
-                    file_id_hex = int(file_id)
-                file_id_int = file_id_hex
+                # Plain decimal VisualIDs from MCP (e.g., "363292") must stay decimal.
+                # Only use hex interpretation for true hex-like IDs.
+                file_id_clean = file_id.strip()
+                if file_id_clean.isdigit():
+                    file_id_hex = int(file_id_clean)
+                    file_id_int = int(file_id_clean)
+                else:
+                    try:
+                        file_id_hex = int(file_id_clean, 16)
+                    except ValueError:
+                        file_id_hex = int(file_id_clean)
+                    file_id_int = file_id_hex
             else:
                 file_id_hex = file_id
                 file_id_int = file_id

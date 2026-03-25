@@ -817,8 +817,35 @@ class OpenDentalMCPTools:
                 }
             },
             {
+                "name": "create_procnote",
+                "description": "Write a clinical note for a completed procedure in Open Dental. Inserts into the procnote table linked to a specific ProcNum. Use for documenting procedure notes after treatment.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "proc_num": {
+                            "type": "integer",
+                            "description": "ProcNum from procedurelog — the procedure to attach the note to"
+                        },
+                        "pat_num": {
+                            "type": "integer",
+                            "description": "PatNum of the patient"
+                        },
+                        "note": {
+                            "type": "string",
+                            "description": "The clinical note text"
+                        },
+                        "user_num": {
+                            "type": "integer",
+                            "description": "UserNum of the provider writing the note (default: 0)",
+                            "default": 0
+                        }
+                    },
+                    "required": ["proc_num", "pat_num", "note"]
+                }
+            },
+            {
                 "name": "query_database",
-                "description": "Execute a query against Open Dental. First tries to use REST API endpoints when possible, then falls back to direct database access for complex queries. For simple queries, uses API (no database config needed). For complex SQL queries, requires OPENDENTAL_DB_* environment variables.",
+                "description": "Execute a query against Open Dental. First tries to use REST API endpoints when possible, then falls back to direct database access for complex queries. For simple queries, uses API (no database config needed). For complex SQL queries, requires OPENDENTAL_DB_* environment variables.\n\nCRITICAL SCHEMA NOTES FOR ACCURATE QUERIES:\n\n1. CLINICAL NOTES (~GRP~ group notes):\n   - Notes are stored in `procnote` table, linked to `procedurelog` via ProcNum\n   - Providers frequently use GROUP NOTES instead of per-procedure notes\n   - A group note is a procedurelog row where procedurecode.ProcCode = '~GRP~', \n     with AptNum=0, keyed by PatNum + ProcDate\n   - A group note with ProcStatus=3 and at least one procnote entry covers ALL \n     procedures for that patient on that date\n   - ProcStatus=6 means the group note was deleted — do NOT count it\n   - When checking for missing notes, a procedure is covered if EITHER:\n     (a) It has a direct procnote (procnote.ProcNum = procedurelog.ProcNum), OR\n     (b) The patient has a ~GRP~ procedurelog row on the same ProcDate with \n         ProcStatus=3 that has at least one procnote attached\n   - Always apply BOTH checks or queries will generate false positives\n\n2. PROCEDURE STATUS VALUES:\n   - ProcStatus=1: Treatment Planned\n   - ProcStatus=2: Complete\n   - ProcStatus=3: Existing (used for group notes)\n   - ProcStatus=6: Deleted\n\n3. CODES TO EXCLUDE from clinical note audits (don't require notes):\n   - Hygiene: D1110, D1120, D1206, D1208, D4910\n   - Radiology: D0210, D0220, D0230, D0240, D0270, D0272, D0273, D0274, D0277, D0330\n   - Admin/other: SEAT, N4101, DR001, FAIL, D8670, D9986, D9987",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -2773,6 +2800,13 @@ class OpenDentalMCPTools:
                 return self._update_procedure_log(arguments.get("procedure_id"), arguments)
             elif tool_name == "create_document":
                 return self._create_document(arguments)
+            elif tool_name == "create_procnote":
+                return self._create_procnote(
+                    arguments.get("proc_num"),
+                    arguments.get("pat_num"),
+                    arguments.get("note"),
+                    arguments.get("user_num", 0),
+                )
             elif tool_name == "upload_document":
                 return self._upload_document(arguments)
             elif tool_name == "query_database":
@@ -4922,6 +4956,118 @@ class OpenDentalMCPTools:
             }
         except Exception as e:
             logger.error(f"Error creating document: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    def _create_procnote(self, proc_num: Any, pat_num: Any, note: Any, user_num: Any = 0) -> Dict:
+        """Create a clinical note row in procnote for a completed procedure."""
+        try:
+            # Validate required values and note text quality first.
+            if proc_num is None or pat_num is None:
+                return {
+                    "success": False,
+                    "error": "proc_num and pat_num are required"
+                }
+
+            note_text = str(note).strip() if note is not None else ""
+            if not note_text:
+                return {
+                    "success": False,
+                    "error": "note cannot be empty"
+                }
+
+            proc_num_int = int(proc_num)
+            pat_num_int = int(pat_num)
+            user_num_int = int(user_num) if user_num is not None else 0
+
+            conn = self._get_db_connection()
+            if not conn:
+                return {
+                    "success": False,
+                    "error": "Database connection not configured. Set OPENDENTAL_DB_* environment variables."
+                }
+
+            cursor = conn.cursor()
+            now_dt = datetime.now()
+            note_preview = note_text[:50]
+            logger.info(
+                "create_procnote write at %s PatNum=%s ProcNum=%s Note[0:50]=%s",
+                now_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                pat_num_int,
+                proc_num_int,
+                note_preview,
+            )
+
+            if self.db_type == "sqlserver":
+                verify_sql = """
+                    SELECT ProcNum, PatNum, ProcStatus
+                    FROM procedurelog
+                    WHERE ProcNum = ? AND PatNum = ? AND ProcStatus = 2
+                """
+                cursor.execute(verify_sql, (proc_num_int, pat_num_int))
+            elif self.db_type == "mysql":
+                verify_sql = """
+                    SELECT ProcNum, PatNum, ProcStatus
+                    FROM procedurelog
+                    WHERE ProcNum = %s AND PatNum = %s AND ProcStatus = 2
+                """
+                cursor.execute(verify_sql, (proc_num_int, pat_num_int))
+            else:
+                cursor.close()
+                conn.close()
+                return {
+                    "success": False,
+                    "error": f"Unsupported database type for create_procnote: {self.db_type}"
+                }
+
+            proc_row = cursor.fetchone()
+            if not proc_row:
+                cursor.close()
+                conn.close()
+                return {
+                    "success": False,
+                    "error": "Procedure not found for this patient, or procedure is not completed (ProcStatus must be 2)."
+                }
+
+            entry_dt = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+            if self.db_type == "sqlserver":
+                insert_sql = """
+                    INSERT INTO procnote (PatNum, ProcNum, EntryDateTime, UserNum, Note, SigIsTopaz, Signature)
+                    VALUES (?, ?, ?, ?, ?, 0, '')
+                """
+                cursor.execute(insert_sql, (pat_num_int, proc_num_int, entry_dt, user_num_int, note_text))
+                cursor.execute("SELECT ISNULL(MAX(ProcNoteNum), 0) FROM procnote WHERE ProcNum = ? AND PatNum = ?", (proc_num_int, pat_num_int))
+                proc_note_num = cursor.fetchone()[0]
+            else:
+                insert_sql = """
+                    INSERT INTO procnote (PatNum, ProcNum, EntryDateTime, UserNum, Note, SigIsTopaz, Signature)
+                    VALUES (%s, %s, %s, %s, %s, 0, '')
+                """
+                cursor.execute(insert_sql, (pat_num_int, proc_num_int, entry_dt, user_num_int, note_text))
+                proc_note_num = getattr(cursor, "lastrowid", None)
+                if not proc_note_num:
+                    cursor.execute("SELECT COALESCE(MAX(ProcNoteNum), 0) FROM procnote WHERE ProcNum = %s AND PatNum = %s", (proc_num_int, pat_num_int))
+                    proc_note_num = cursor.fetchone()[0]
+
+            conn.commit()
+            cursor.close()
+            conn.close()
+
+            return {
+                "success": True,
+                "message": "Clinical note created successfully",
+                "procnote": {
+                    "ProcNoteNum": int(proc_note_num) if proc_note_num is not None else None,
+                    "PatNum": pat_num_int,
+                    "ProcNum": proc_num_int,
+                    "UserNum": user_num_int,
+                    "EntryDateTime": entry_dt,
+                }
+            }
+        except Exception as e:
+            logger.error(f"Error creating procnote: {e}")
             return {
                 "success": False,
                 "error": str(e)
