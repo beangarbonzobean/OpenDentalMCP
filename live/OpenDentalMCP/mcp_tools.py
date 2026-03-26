@@ -787,6 +787,64 @@ class OpenDentalMCPTools:
                 }
             },
             {
+                "name": "create_procedure_log",
+                "description": "Create a new procedure log entry (treatment planned procedure). WARNING: This will create a new procedure in Open Dental. Use ProcStatus 'TP' to add treatment-planned procedures that appear on the patient's active treatment plan. Surfaces should use standard abbreviations: M=Mesial, D=Distal, F=Facial, L=Lingual, O=Occlusal, I=Incisal, B=Buccal.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "PatNum": {
+                            "type": "string",
+                            "description": "Patient ID (PatNum) - required"
+                        },
+                        "procCode": {
+                            "type": "string",
+                            "description": "Procedure code (e.g., D6010, D2393, D7951) - required"
+                        },
+                        "ToothNum": {
+                            "type": "string",
+                            "description": "Optional: Tooth number (1-32 for permanent, A-T for primary)"
+                        },
+                        "Surf": {
+                            "type": "string",
+                            "description": "Optional: Tooth surfaces (e.g., 'MFL', 'DO', 'MODBL'). Use standard abbreviations."
+                        },
+                        "ProcDate": {
+                            "type": "string",
+                            "description": "Optional: Procedure date (YYYY-MM-DD). Defaults to today."
+                        },
+                        "ProcStatus": {
+                            "type": "string",
+                            "description": "Optional: Procedure status. 'TP' = Treatment Planned (default), 'C' = Complete, 'EC' = Existing Current, 'EO' = Existing Other, 'R' = Referred, 'D' = Deleted, 'Cn' = Condition"
+                        },
+                        "ProvNum": {
+                            "type": "string",
+                            "description": "Optional: Provider ID (ProvNum). Defaults to patient's primary provider."
+                        },
+                        "ClinicNum": {
+                            "type": "string",
+                            "description": "Optional: Clinic ID (ClinicNum)"
+                        },
+                        "Dx": {
+                            "type": "string",
+                            "description": "Optional: Diagnosis definition ID (DefNum)"
+                        },
+                        "priority": {
+                            "type": "string",
+                            "description": "Optional: Treatment priority definition ID (DefNum)"
+                        },
+                        "ToothRange": {
+                            "type": "string",
+                            "description": "Optional: Tooth range for procedures spanning multiple teeth (e.g., '1-16')"
+                        },
+                        "ProcFee": {
+                            "type": "string",
+                            "description": "Optional: Procedure fee override. If not set, uses the fee schedule amount."
+                        }
+                    },
+                    "required": ["PatNum", "procCode"]
+                }
+            },
+            {
                 "name": "create_document",
                 "description": "Create a new document record. Uses direct database access if configured (set OPENDENTAL_DB_* environment variables). If database not configured, will attempt REST API (which may not work).",
                 "inputSchema": {
@@ -2656,6 +2714,88 @@ class OpenDentalMCPTools:
                 }
             },
             {
+                "name": "create_treatment_plan_procedure",
+                "description": "Add a procedure directly to a specific treatment plan by TreatPlanNum. WARNING: This will create a new procedure entry on the treatment plan in Open Dental. Use this to build alternative treatment plans (e.g., Plan A vs Plan B) by adding procedures to different inactive plans. Surfaces should use standard abbreviations: M=Mesial, D=Distal, F=Facial, L=Lingual, O=Occlusal, I=Incisal, B=Buccal.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "TreatPlanNum": {
+                            "type": "string",
+                            "description": "Treatment plan ID (TreatPlanNum) to add the procedure to - required"
+                        },
+                        "PatNum": {
+                            "type": "string",
+                            "description": "Patient ID (PatNum) - required"
+                        },
+                        "ProcCode": {
+                            "type": "string",
+                            "description": "Procedure code (e.g., 'D6010', 'D2393', 'D7951') - required"
+                        },
+                        "ToothNumTP": {
+                            "type": "string",
+                            "description": "Optional: Tooth number (1-32 for permanent, A-T for primary)"
+                        },
+                        "Surf": {
+                            "type": "string",
+                            "description": "Optional: Tooth surfaces (e.g., 'MFL', 'DO', 'MODBL'). Use standard abbreviations."
+                        },
+                        "Descript": {
+                            "type": "string",
+                            "description": "Optional: Procedure description. If not provided, uses the default description for the procedure code."
+                        },
+                        "FeeAmt": {
+                            "type": "string",
+                            "description": "Optional: Fee amount. If not set, uses fee schedule amount."
+                        },
+                        "PriInsAmt": {
+                            "type": "string",
+                            "description": "Optional: Primary insurance estimated amount"
+                        },
+                        "SecInsAmt": {
+                            "type": "string",
+                            "description": "Optional: Secondary insurance estimated amount"
+                        },
+                        "PatAmt": {
+                            "type": "string",
+                            "description": "Optional: Patient estimated amount"
+                        },
+                        "Discount": {
+                            "type": "string",
+                            "description": "Optional: Discount amount"
+                        },
+                        "Priority": {
+                            "type": "string",
+                            "description": "Optional: Priority ID (DefNum where Category=20)"
+                        },
+                        "Prognosis": {
+                            "type": "string",
+                            "description": "Optional: Prognosis text"
+                        },
+                        "Dx": {
+                            "type": "string",
+                            "description": "Optional: Diagnosis text"
+                        },
+                        "ProvNum": {
+                            "type": "string",
+                            "description": "Optional: Provider ID (ProvNum)"
+                        },
+                        "DateTP": {
+                            "type": "string",
+                            "description": "Optional: Treatment plan date (YYYY-MM-DD). Defaults to today."
+                        },
+                        "ClinicNum": {
+                            "type": "string",
+                            "description": "Optional: Clinic ID (ClinicNum)"
+                        },
+                        "ItemOrder": {
+                            "type": "string",
+                            "description": "Optional: Display order of this procedure within the treatment plan"
+                        }
+                    },
+                    "required": ["TreatPlanNum", "PatNum", "ProcCode"]
+                }
+            },
+            {
                 "name": "delete_treatment_plan_procedure",
                 "description": "Delete a treatment plan procedure. WARNING: This will permanently delete the procedure from Open Dental. Only works for unsigned treatment plans.",
                 "inputSchema": {
@@ -2798,6 +2938,8 @@ class OpenDentalMCPTools:
                 return self._update_lab_case(arguments.get("lab_case_id"), arguments)
             elif tool_name == "update_procedure_log":
                 return self._update_procedure_log(arguments.get("procedure_id"), arguments)
+            elif tool_name == "create_procedure_log":
+                return self._create_procedure_log(arguments)
             elif tool_name == "create_document":
                 return self._create_document(arguments)
             elif tool_name == "create_procnote":
@@ -2927,6 +3069,8 @@ class OpenDentalMCPTools:
                 return self._update_treatment_plan_procedure(arguments.get("proc_tp_num"), arguments)
             elif tool_name == "delete_treatment_plan_procedure":
                 return self._delete_treatment_plan_procedure(arguments.get("proc_tp_num"))
+            elif tool_name == "create_treatment_plan_procedure":
+                return self._create_treatment_plan_procedure(arguments)
             elif tool_name == "get_patient_info":
                 return self._get_patient_info(arguments.get("patient_id"))
             elif tool_name == "get_progress_notes":
@@ -3815,7 +3959,60 @@ class OpenDentalMCPTools:
                 "success": False,
                 "error": str(e)
             }
-    
+
+    def _create_procedure_log(self, procedure_data: Dict) -> Dict:
+        """Create a new procedure log entry (treatment planned procedure).
+
+        Creates a procedure via POST /procedurelogs. By default, procedures are
+        created with ProcStatus 'TP' (Treatment Planned) and will appear on the
+        patient's active treatment plan.
+
+        Args:
+            procedure_data: Dict containing at minimum PatNum and procCode.
+                Optional fields: ToothNum, Surf, ProcDate, ProcStatus, ProvNum,
+                ClinicNum, Dx, priority, ToothRange, ProcFee.
+
+        Returns:
+            Dict with success status and the created procedure data.
+        """
+        try:
+            # Validate required fields
+            if not procedure_data.get("PatNum"):
+                return {
+                    "success": False,
+                    "error": "PatNum is required"
+                }
+            if not procedure_data.get("procCode"):
+                return {
+                    "success": False,
+                    "error": "procCode is required (e.g., 'D6010', 'D2393')"
+                }
+
+            # Build the API payload with only recognized fields
+            api_fields = [
+                "PatNum", "procCode", "ToothNum", "Surf", "ProcDate",
+                "ProcStatus", "ProvNum", "ClinicNum", "Dx", "priority",
+                "ToothRange", "ProcFee", "CodeNum"
+            ]
+            payload = {k: v for k, v in procedure_data.items() if k in api_fields and v is not None and v != ""}
+
+            # Default ProcStatus to TP (Treatment Planned) if not specified
+            if "ProcStatus" not in payload:
+                payload["ProcStatus"] = "TP"
+
+            result = self._make_request("POST", "/procedurelogs", data=payload)
+            return {
+                "success": True,
+                "message": f"Procedure log created successfully (procCode: {procedure_data.get('procCode')}, status: {payload.get('ProcStatus', 'TP')})",
+                "procedure": result
+            }
+        except Exception as e:
+            logger.error(f"Error creating procedure log: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
     def _get_patient_aging(self, patient_id: str) -> Dict:
         """Get aging information for a patient and their family"""
         try:
@@ -4819,7 +5016,64 @@ class OpenDentalMCPTools:
                 "success": False,
                 "error": str(e)
             }
-    
+
+    def _create_treatment_plan_procedure(self, proc_data: Dict) -> Dict:
+        """Add a procedure directly to a specific treatment plan.
+
+        Creates a treatment plan procedure (ProcTP) via POST /proctps. This allows
+        adding procedures to specific inactive or active treatment plans, enabling
+        alternative treatment plan workflows (e.g., Plan A vs Plan B).
+
+        Args:
+            proc_data: Dict containing at minimum TreatPlanNum, PatNum, and ProcCode.
+                Optional fields: ToothNumTP, Surf, Descript, FeeAmt, PriInsAmt,
+                SecInsAmt, PatAmt, Discount, Priority, Prognosis, Dx, ProvNum,
+                DateTP, ClinicNum, ItemOrder.
+
+        Returns:
+            Dict with success status and the created procedure data.
+        """
+        try:
+            # Validate required fields
+            if not proc_data.get("TreatPlanNum"):
+                return {
+                    "success": False,
+                    "error": "TreatPlanNum is required — specify which treatment plan to add the procedure to"
+                }
+            if not proc_data.get("PatNum"):
+                return {
+                    "success": False,
+                    "error": "PatNum is required"
+                }
+            if not proc_data.get("ProcCode"):
+                return {
+                    "success": False,
+                    "error": "ProcCode is required (e.g., 'D6010', 'D2393')"
+                }
+
+            # Build the API payload with only recognized ProcTP fields
+            api_fields = [
+                "TreatPlanNum", "PatNum", "ProcCode", "ToothNumTP", "Surf",
+                "Descript", "FeeAmt", "PriInsAmt", "SecInsAmt", "PatAmt",
+                "Discount", "Priority", "Prognosis", "Dx", "ProcAbbr",
+                "ProvNum", "DateTP", "ClinicNum", "ItemOrder", "ProcNumOrig",
+                "FeeAllowed"
+            ]
+            payload = {k: v for k, v in proc_data.items() if k in api_fields and v is not None and v != ""}
+
+            result = self._make_request("POST", "/proctps", data=payload)
+            return {
+                "success": True,
+                "message": f"Procedure added to treatment plan {proc_data.get('TreatPlanNum')} (ProcCode: {proc_data.get('ProcCode')})",
+                "treatment_plan_procedure": result
+            }
+        except Exception as e:
+            logger.error(f"Error creating treatment plan procedure: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
     def _get_patient_info(self, patient_id: str) -> Dict:
         """Get patient information from Chart Module"""
         try:
