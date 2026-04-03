@@ -2854,6 +2854,105 @@ class OpenDentalMCPTools:
                     },
                     "required": ["patient_id"]
                 }
+            },
+            # ── Popup tools (direct DB) ──────────────────────────────
+            {
+                "name": "get_popups",
+                "description": "Get popup alerts for a patient or matching a description filter. Requires direct database connection.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "patient_id": {
+                            "type": "string",
+                            "description": "Patient ID (PatNum) - optional, filters by patient"
+                        },
+                        "include_disabled": {
+                            "type": "boolean",
+                            "description": "Include disabled popups (default false)"
+                        },
+                        "description_contains": {
+                            "type": "string",
+                            "description": "Filter popups whose Description contains this text (case-insensitive LIKE)"
+                        }
+                    },
+                    "required": []
+                }
+            },
+            {
+                "name": "create_popup",
+                "description": "Create a single popup alert for a patient. Requires direct database connection.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "patient_id": {
+                            "type": "string",
+                            "description": "Patient ID (PatNum) - required"
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": "Popup message text - required"
+                        },
+                        "popup_level": {
+                            "type": "integer",
+                            "description": "Popup level (default 0)"
+                        }
+                    },
+                    "required": ["patient_id", "description"]
+                }
+            },
+            {
+                "name": "create_popups_batch",
+                "description": "Create multiple popup alerts in a single call. Each popup is inserted individually so partial success is possible. Requires direct database connection.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "popups": {
+                            "type": "array",
+                            "description": "Array of popup objects to create",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "patient_id": {
+                                        "type": "string",
+                                        "description": "Patient ID (PatNum)"
+                                    },
+                                    "description": {
+                                        "type": "string",
+                                        "description": "Popup message text"
+                                    },
+                                    "popup_level": {
+                                        "type": "integer",
+                                        "description": "Popup level (default 0)"
+                                    }
+                                },
+                                "required": ["patient_id", "description"]
+                            }
+                        }
+                    },
+                    "required": ["popups"]
+                }
+            },
+            {
+                "name": "disable_popups",
+                "description": "Disable popup alerts matching the given criteria. At least one filter (patient_id or description_contains) is required. Requires direct database connection.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "patient_id": {
+                            "type": "string",
+                            "description": "Patient ID (PatNum) - optional filter"
+                        },
+                        "description_contains": {
+                            "type": "string",
+                            "description": "Disable popups whose Description contains this text (case-insensitive LIKE)"
+                        },
+                        "disable_all_matching": {
+                            "type": "boolean",
+                            "description": "Must be true to confirm bulk disable when using description_contains without patient_id (safety guard, default false)"
+                        }
+                    },
+                    "required": []
+                }
             }
         ]
     
@@ -3077,6 +3176,23 @@ class OpenDentalMCPTools:
                 return self._get_progress_notes(arguments.get("patient_id"), arguments.get("offset"))
             elif tool_name == "get_planned_appointments":
                 return self._get_planned_appointments(arguments.get("patient_id"))
+            # ── Popup tools ──
+            elif tool_name == "get_popups":
+                return self._get_popups(
+                    patient_id=arguments.get("patient_id") or arguments.get("PatNum"),
+                    include_disabled=arguments.get("include_disabled", False),
+                    description_contains=arguments.get("description_contains")
+                )
+            elif tool_name == "create_popup":
+                return self._create_popup(arguments)
+            elif tool_name == "create_popups_batch":
+                return self._create_popups_batch(arguments.get("popups", []))
+            elif tool_name == "disable_popups":
+                return self._disable_popups(
+                    patient_id=arguments.get("patient_id") or arguments.get("PatNum"),
+                    description_contains=arguments.get("description_contains"),
+                    disable_all_matching=arguments.get("disable_all_matching", False)
+                )
             else:
                 raise ValueError(f"Unknown tool: {tool_name}")
         except Exception as e:
@@ -3224,6 +3340,12 @@ class OpenDentalMCPTools:
                     "endpoint": "/chartmodules",
                     "description": "Chart module endpoints (PatientInfo, ProgNotes, PlannedAppts)",
                     "methods": ["GET"]
+                },
+                {
+                    "name": "popups",
+                    "endpoint": "direct_db_only",
+                    "description": "Patient popup alerts (direct database access only - no REST API)",
+                    "methods": ["GET", "POST", "PUT"]
                 }
             ],
             "api_url": self.api_url
@@ -6450,4 +6572,227 @@ LIMIT 1000
                 "success": False,
                 "error": str(e)
             }
+
+    # ── Popup tools (direct DB) ──────────────────────────────────
+
+    def _get_popups(self, patient_id: Optional[str] = None, include_disabled: bool = False,
+                    description_contains: Optional[str] = None) -> Dict:
+        """Get popup alerts, optionally filtered by patient and/or description."""
+        try:
+            conn = self._get_db_connection()
+            if not conn:
+                return {"success": False, "error": "Database connection not configured. Set OPENDENTAL_DB_* environment variables."}
+
+            cursor = conn.cursor()
+            conditions = []
+            params = []
+            ph = "?" if self.db_type == "sqlserver" else "%s"
+
+            if not include_disabled:
+                conditions.append("IsDisabled = 0")
+
+            if patient_id:
+                conditions.append(f"PatNum = {ph}")
+                params.append(int(patient_id))
+
+            if description_contains:
+                conditions.append(f"Description LIKE {ph}")
+                params.append(f"%{description_contains}%")
+
+            where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+            sql = f"SELECT PopupNum, PatNum, Description, IsDisabled, PopupLevel, UserNum, DateTimeEntry, IsArchived, DateTimeDisabled FROM popup{where} ORDER BY PopupNum DESC"
+
+            cursor.execute(sql, params)
+            columns = [desc[0] for desc in cursor.description]
+            rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+            cursor.close()
+            conn.close()
+
+            # Stringify datetimes for JSON serialisation
+            for row in rows:
+                for k, v in row.items():
+                    if isinstance(v, datetime):
+                        row[k] = v.strftime("%Y-%m-%d %H:%M:%S")
+
+            return {"success": True, "popups": rows, "count": len(rows)}
+
+        except Exception as e:
+            logger.error(f"Error in get_popups: {e}")
+            return {"success": False, "error": str(e)}
+
+    def _create_popup(self, data: Dict) -> Dict:
+        """Create a single popup alert."""
+        try:
+            patient_id = data.get("patient_id") or data.get("PatNum")
+            description = data.get("description", "")
+            popup_level = int(data.get("popup_level", 0))
+
+            if not patient_id or not description:
+                return {"success": False, "error": "patient_id and description are required"}
+
+            conn = self._get_db_connection()
+            if not conn:
+                return {"success": False, "error": "Database connection not configured. Set OPENDENTAL_DB_* environment variables."}
+
+            cursor = conn.cursor()
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            if self.db_type == "sqlserver":
+                cursor.execute("SELECT ISNULL(MAX(PopupNum), 0) + 1 FROM popup")
+                popup_num = cursor.fetchone()[0]
+                cursor.execute("""
+                    INSERT INTO popup (PopupNum, PatNum, Description, IsDisabled, PopupLevel, UserNum, DateTimeEntry, IsArchived, PopupNumArchive, DateTimeDisabled)
+                    VALUES (?, ?, ?, 0, ?, 0, ?, 0, 0, '0001-01-01')
+                """, (popup_num, int(patient_id), description, popup_level, now_str))
+            elif self.db_type == "mysql":
+                cursor.execute("SELECT COALESCE(MAX(PopupNum), 0) + 1 FROM popup")
+                popup_num = cursor.fetchone()[0]
+                cursor.execute("""
+                    INSERT INTO popup (PopupNum, PatNum, Description, IsDisabled, PopupLevel, UserNum, DateTimeEntry, IsArchived, PopupNumArchive, DateTimeDisabled)
+                    VALUES (%s, %s, %s, 0, %s, 0, %s, 0, 0, '0001-01-01')
+                """, (popup_num, int(patient_id), description, popup_level, now_str))
+            else:
+                cursor.close()
+                conn.close()
+                return {"success": False, "error": f"Unsupported db_type: {self.db_type}"}
+
+            conn.commit()
+            cursor.close()
+            conn.close()
+
+            return {
+                "success": True,
+                "message": "Popup created successfully",
+                "popup": {"PopupNum": popup_num, "PatNum": int(patient_id), "Description": description, "PopupLevel": popup_level}
+            }
+
+        except Exception as e:
+            logger.error(f"Error in create_popup: {e}")
+            return {"success": False, "error": str(e)}
+
+    def _create_popups_batch(self, popups: List[Dict]) -> Dict:
+        """Create multiple popup alerts in a single transaction."""
+        try:
+            if not popups:
+                return {"success": False, "error": "popups array is empty"}
+
+            conn = self._get_db_connection()
+            if not conn:
+                return {"success": False, "error": "Database connection not configured. Set OPENDENTAL_DB_* environment variables."}
+
+            cursor = conn.cursor()
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            # Get starting PopupNum
+            if self.db_type == "sqlserver":
+                cursor.execute("SELECT ISNULL(MAX(PopupNum), 0) FROM popup")
+            elif self.db_type == "mysql":
+                cursor.execute("SELECT COALESCE(MAX(PopupNum), 0) FROM popup")
+            else:
+                cursor.close()
+                conn.close()
+                return {"success": False, "error": f"Unsupported db_type: {self.db_type}"}
+
+            next_num = cursor.fetchone()[0] + 1
+
+            created = []
+            errors = []
+
+            for i, p in enumerate(popups):
+                pat_id = p.get("patient_id") or p.get("PatNum")
+                desc = p.get("description", "")
+                level = int(p.get("popup_level", 0))
+
+                if not pat_id or not desc:
+                    errors.append({"index": i, "error": "missing patient_id or description"})
+                    continue
+
+                popup_num = next_num + len(created)
+                try:
+                    if self.db_type == "sqlserver":
+                        cursor.execute("""
+                            INSERT INTO popup (PopupNum, PatNum, Description, IsDisabled, PopupLevel, UserNum, DateTimeEntry, IsArchived, PopupNumArchive, DateTimeDisabled)
+                            VALUES (?, ?, ?, 0, ?, 0, ?, 0, 0, '0001-01-01')
+                        """, (popup_num, int(pat_id), desc, level, now_str))
+                    else:
+                        cursor.execute("""
+                            INSERT INTO popup (PopupNum, PatNum, Description, IsDisabled, PopupLevel, UserNum, DateTimeEntry, IsArchived, PopupNumArchive, DateTimeDisabled)
+                            VALUES (%s, %s, %s, 0, %s, 0, %s, 0, 0, '0001-01-01')
+                        """, (popup_num, int(pat_id), desc, level, now_str))
+                    created.append({"PopupNum": popup_num, "PatNum": int(pat_id), "Description": desc})
+                except Exception as insert_err:
+                    errors.append({"index": i, "PatNum": pat_id, "error": str(insert_err)})
+
+            conn.commit()
+            cursor.close()
+            conn.close()
+
+            return {
+                "success": True,
+                "message": f"Created {len(created)} popup(s)",
+                "created_count": len(created),
+                "error_count": len(errors),
+                "created": created,
+                "errors": errors if errors else None
+            }
+
+        except Exception as e:
+            logger.error(f"Error in create_popups_batch: {e}")
+            return {"success": False, "error": str(e)}
+
+    def _disable_popups(self, patient_id: Optional[str] = None,
+                        description_contains: Optional[str] = None,
+                        disable_all_matching: bool = False) -> Dict:
+        """Disable popup alerts matching criteria."""
+        try:
+            if not patient_id and not description_contains:
+                return {"success": False, "error": "At least one filter (patient_id or description_contains) is required"}
+
+            if description_contains and not patient_id and not disable_all_matching:
+                return {
+                    "success": False,
+                    "error": "Set disable_all_matching=true to confirm bulk disable by description without a patient_id filter"
+                }
+
+            conn = self._get_db_connection()
+            if not conn:
+                return {"success": False, "error": "Database connection not configured. Set OPENDENTAL_DB_* environment variables."}
+
+            cursor = conn.cursor()
+            conditions = ["IsDisabled = 0"]
+            params = []
+            ph = "?" if self.db_type == "sqlserver" else "%s"
+
+            if patient_id:
+                conditions.append(f"PatNum = {ph}")
+                params.append(int(patient_id))
+
+            if description_contains:
+                conditions.append(f"Description LIKE {ph}")
+                params.append(f"%{description_contains}%")
+
+            where = " AND ".join(conditions)
+
+            if self.db_type == "sqlserver":
+                sql = f"UPDATE popup SET IsDisabled = 1, DateTimeDisabled = GETDATE() WHERE {where}"
+            else:
+                sql = f"UPDATE popup SET IsDisabled = 1, DateTimeDisabled = NOW() WHERE {where}"
+
+            cursor.execute(sql, params)
+            affected = cursor.rowcount
+
+            conn.commit()
+            cursor.close()
+            conn.close()
+
+            return {
+                "success": True,
+                "message": f"Disabled {affected} popup(s)",
+                "disabled_count": affected
+            }
+
+        except Exception as e:
+            logger.error(f"Error in disable_popups: {e}")
+            return {"success": False, "error": str(e)}
 
