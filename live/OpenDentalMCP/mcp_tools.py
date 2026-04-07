@@ -2953,9 +2953,47 @@ class OpenDentalMCPTools:
                     },
                     "required": []
                 }
+            },
+            {
+                "name": "create_commlog",
+                "description": "Create a new communication log entry for a patient. WARNING: This will create a new commlog in Open Dental.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "PatNum": {
+                            "type": "string",
+                            "description": "Patient ID (PatNum) - required"
+                        },
+                        "Note": {
+                            "type": "string",
+                            "description": "Communication note text - required"
+                        },
+                        "CommDateTime": {
+                            "type": "string",
+                            "description": "Optional: Date/time of communication (YYYY-MM-DD HH:MM:SS). Defaults to now"
+                        },
+                        "CommType": {
+                            "type": "string",
+                            "description": "Optional: Communication type (DefNum where Category=27)"
+                        },
+                        "commType": {
+                            "type": "string",
+                            "description": "Optional: Communication type by name (ItemName where Category=27). Takes precedence over CommType"
+                        },
+                        "Mode_": {
+                            "type": "string",
+                            "description": "Optional: Communication mode ('None', 'Email', 'Mail', 'Phone', 'In Person', 'Text', 'Email and Text', 'Phone and Text'). Default 'Phone'"
+                        },
+                        "SentOrReceived": {
+                            "type": "string",
+                            "description": "Optional: Direction ('Neither', 'Sent', 'Received'). Default 'Sent'"
+                        }
+                    },
+                    "required": ["PatNum", "Note"]
+                }
             }
         ]
-    
+
     def call_tool(self, tool_name: str, arguments: Dict) -> Any:
         """Call a tool by name with arguments"""
         try:
@@ -3193,6 +3231,9 @@ class OpenDentalMCPTools:
                     description_contains=arguments.get("description_contains"),
                     disable_all_matching=arguments.get("disable_all_matching", False)
                 )
+            # ── Commlog tools ──
+            elif tool_name == "create_commlog":
+                return self._create_commlog(arguments)
             else:
                 raise ValueError(f"Unknown tool: {tool_name}")
         except Exception as e:
@@ -3345,6 +3386,12 @@ class OpenDentalMCPTools:
                     "name": "popups",
                     "endpoint": "direct_db_only",
                     "description": "Patient popup alerts (direct database access only - no REST API)",
+                    "methods": ["GET", "POST", "PUT"]
+                },
+                {
+                    "name": "commlogs",
+                    "endpoint": "/commlogs",
+                    "description": "Communication log records",
                     "methods": ["GET", "POST", "PUT"]
                 }
             ],
@@ -4134,6 +4181,39 @@ class OpenDentalMCPTools:
                 "success": False,
                 "error": str(e)
             }
+
+    def _create_commlog(self, commlog_data: Dict) -> Dict:
+        """Create a new communication log entry for a patient.
+
+        Args:
+            commlog_data: Dict containing at minimum PatNum and Note.
+                Optional fields: CommDateTime, CommType, commType, Mode_, SentOrReceived.
+
+        Returns:
+            Dict with success status and the created commlog data.
+        """
+        try:
+            if not commlog_data.get("PatNum"):
+                return {"success": False, "error": "PatNum is required"}
+            if not commlog_data.get("Note"):
+                return {"success": False, "error": "Note is required"}
+
+            api_fields = [
+                "PatNum", "Note", "CommDateTime", "CommType",
+                "commType", "Mode_", "SentOrReceived"
+            ]
+            payload = {k: v for k, v in commlog_data.items()
+                       if k in api_fields and v is not None and v != ""}
+
+            result = self._make_request("POST", "/commlogs", data=payload)
+            return {
+                "success": True,
+                "message": f"Commlog created for patient {commlog_data['PatNum']}",
+                "commlog": result
+            }
+        except Exception as e:
+            logger.error(f"Error creating commlog: {e}")
+            return {"success": False, "error": str(e)}
 
     def _get_patient_aging(self, patient_id: str) -> Dict:
         """Get aging information for a patient and their family"""

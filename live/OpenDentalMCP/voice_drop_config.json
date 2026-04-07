@@ -1,0 +1,28 @@
+{
+    "mcp_endpoint": "https://opendental-mcp.huntingtonbeachdentalcenter.com/mcp",
+    "mcp_bearer_token": "YOUR_BEARER_TOKEN",
+
+    "anthropic_api_key": "YOUR_ANTHROPIC_API_KEY",
+
+    "elevenlabs_api_key": "",
+    "elevenlabs_voice_id": "",
+    "elevenlabs_model_id": "eleven_multilingual_v2",
+
+    "drop_cowboy_api_key": "",
+    "drop_cowboy_api_secret": "",
+
+    "test_mode": true,
+    "test_patient_name": "Ben Young",
+    "dry_run": false,
+
+    "lookback_days": 1,
+    "audio_output_dir": "voice_drops",
+    "log_file": "voice_drop.log",
+
+    "procedure_codes": {
+        "extractions": ["D7140", "D7210", "D7220", "D7230", "D7240", "D7241"],
+        "implants": ["D6010", "D6012", "D6040", "D6050"],
+        "root_canals": ["D3310", "D3320", "D3330"],
+        "surgeries": ["D7951", "D7952", "D7953"]
+    }
+}
