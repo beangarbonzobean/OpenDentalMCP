@@ -12,6 +12,11 @@ import base64
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timedelta
 
+from new_patient_doctor_resolver import (
+    get_new_patient_exam_doctors,
+    TOOL_SCHEMA as NEW_PATIENT_DOCTOR_TOOL_SCHEMA,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -2991,13 +2996,21 @@ class OpenDentalMCPTools:
                     },
                     "required": ["PatNum", "Note"]
                 }
-            }
+            },
+            NEW_PATIENT_DOCTOR_TOOL_SCHEMA,
         ]
 
     def call_tool(self, tool_name: str, arguments: Dict) -> Any:
         """Call a tool by name with arguments"""
         try:
-            if tool_name == "list_resources":
+            if tool_name == "get_new_patient_exam_doctors":
+                return get_new_patient_exam_doctors(
+                    self,
+                    from_date=arguments["from_date"],
+                    to_date=arguments["to_date"],
+                    include_note_text=bool(arguments.get("include_note_text", False)),
+                )
+            elif tool_name == "list_resources":
                 return self._list_resources()
             elif tool_name == "get_patient":
                 return self._get_patient(arguments.get("patient_id"))
