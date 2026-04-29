@@ -27,11 +27,36 @@ logger = logging.getLogger(__name__)
 
 class XRayFileHandler(FileSystemEventHandler):
     """Handles file system events for DEXIS x-ray files."""
-    
-    def __init__(self, config):
+
+    def __init__(self, config, state_file='processed_files.json'):
         self.config = config
-        self.processed_files = set()
-        logger.info("X-Ray File Handler initialized")
+        self.state_file = Path(state_file)
+        self.processed_files = self._load_state()
+        logger.info(f"X-Ray File Handler initialized with {len(self.processed_files)} previously processed files")
+
+    def _load_state(self):
+        """Load processed files set from disk."""
+        try:
+            if self.state_file.exists():
+                with open(self.state_file, 'r') as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    return set(data)
+                logger.warning("State file had unexpected format, starting fresh")
+        except (json.JSONDecodeError, IOError) as e:
+            logger.warning(f"Could not load state file ({e}), starting fresh")
+        return set()
+
+    def _save_state(self):
+        """Persist processed files set to disk."""
+        try:
+            # Write to a temp file first, then rename for atomicity
+            tmp_file = self.state_file.with_suffix('.tmp')
+            with open(tmp_file, 'w') as f:
+                json.dump(sorted(self.processed_files), f, indent=2)
+            tmp_file.replace(self.state_file)
+        except IOError as e:
+            logger.error(f"Could not save state file: {e}")
     
     def on_created(self, event):
         """Called when a new file is created."""
@@ -65,7 +90,8 @@ class XRayFileHandler(FileSystemEventHandler):
                 return
             
             self.processed_files.add(str(file_path))
-            
+            self._save_state()
+
             # Wait a moment for file to be fully written
             import time
             time.sleep(0.5)
@@ -247,6 +273,7 @@ class DEXISMonitor:
         """Return default configuration."""
         return {
             "dexis_images_path": "\\\\YOUR_FILE_SERVER\\DEXIS Imaging Suite\\Data\\Images",
+            "state_file": "processed_files.json",
             "notifications": {
                 "desktop": True,
                 "email": False,
@@ -276,8 +303,9 @@ class DEXISMonitor:
         if os.path.exists(thumbnails_path):
             logger.info(f"Also monitoring: {thumbnails_path}")
         
-        # Create event handler
-        self.event_handler = XRayFileHandler(self.config)
+        # Create event handler with persistent state file
+        state_file = self.config.get('state_file', 'processed_files.json')
+        self.event_handler = XRayFileHandler(self.config, state_file=state_file)
         
         # Create observer
         self.observer = Observer()

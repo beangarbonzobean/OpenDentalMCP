@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.mcp_token
+.env
+config.prod.json
+service_stdout.log
+service_stderr.log
+mcp_server_http.log

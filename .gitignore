@@ -7,15 +7,27 @@
 live/**/config.json
 live/OpenDentalMCP/config.prod.json
 live/DEXISMonitor/config.prod.json
+live/OpenDentalMCP/voice_drop_config.prod.json
 
 # TLS / keys (deploy from secure store, not git)
 *.pem
 *.key
 *.crt
 
+# Bearer / admin tokens (deploy from secure store)
+**/.mcp_token
+**/.admin_token
+
 # Python virtual environments (never commit)
 .venv/
 **/.venv/
+
+# Runtime state files
+processed_files.json
+processed_files.tmp
+
+# Generated outputs (audio drops, deployment archives)
+live/**/voice_drops/
 
 # Logs and caches
 *.log
@@ -23,11 +35,24 @@ live/DEXISMonitor/config.prod.json
 __pycache__/
 *.pyc
 
-# OS / editor
+# OS / editor / agent state
 Thumbs.db
 Desktop.ini
 .vscode/
 .idea/
+.cursor/
+.claude/
 
 # Archives (use Git history instead of zipped snapshots)
 *.zip
+
+# Skill bundles (managed separately, not part of this repo)
+*.skill
+/skills/
+
+# Workspaces, experiments, and ad-hoc data
+/Mar26Restore/
+/payroll-processor-workspace/
+/opendental-db-safety/
+/opendental-db-safety-workspace/
+/PayrollInput_*.xlsx

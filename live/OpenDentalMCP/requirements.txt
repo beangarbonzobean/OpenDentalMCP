@@ -4,6 +4,8 @@ requests>=2.31.0
 cryptography>=41.0.0
 anthropic>=0.40.0
 elevenlabs>=1.0.0
+Pillow>=10.0
+pypdf>=6.0
 
 # Optional database libraries for direct database access (document uploads)
 # Install based on your Open Dental database type:

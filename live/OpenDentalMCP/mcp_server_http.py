@@ -19,15 +19,13 @@ import os
 sys.path.insert(0, str(Path(__file__).parent))
 
 from mcp_tools import OpenDentalMCPTools
+from np_tracker_routes import np_tracker_bp
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('opendental_mcp_http.log'),
-        logging.StreamHandler()
-    ]
+    handlers=[logging.StreamHandler()]
 )
 logger = logging.getLogger(__name__)
 
@@ -35,6 +33,10 @@ app = Flask(__name__)
 CORS(app)  # Enable CORS for cross-origin requests
 
 tools = OpenDentalMCPTools()
+
+# New Patient Tracker blueprint — LAN-only browser dashboard. The blueprint
+# enforces RFC-1918 source-IP gating internally; see np_tracker_routes.py.
+app.register_blueprint(np_tracker_bp)
 
 
 @app.route('/health', methods=['GET'])
@@ -119,17 +121,22 @@ def handle_mcp_request():
             
             try:
                 result = tools.call_tool(tool_name, arguments)
+                # Opt-in rich content: if a tool returns a dict with "_mcp_content",
+                # pass that array through as MCP content blocks (supports image/document
+                # blocks). Otherwise fall back to the default text-wrap behavior.
+                if isinstance(result, dict) and "_mcp_content" in result:
+                    content = result["_mcp_content"]
+                else:
+                    content = [
+                        {
+                            "type": "text",
+                            "text": json.dumps(result, indent=2)
+                        }
+                    ]
                 return jsonify({
                     "jsonrpc": "2.0",
                     "id": request_id,
-                    "result": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": json.dumps(result, indent=2)
-                            }
-                        ]
-                    }
+                    "result": {"content": content}
                 })
             except Exception as e:
                 logger.error(f"Error calling tool {tool_name}: {e}", exc_info=True)

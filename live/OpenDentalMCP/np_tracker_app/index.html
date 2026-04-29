@@ -1,0 +1,834 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>New Patient Tracker — HBDC</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: oklch(0.985 0.003 95);
+    --surface: #ffffff;
+    --ink: oklch(0.18 0.01 260);
+    --ink-2: oklch(0.42 0.01 260);
+    --ink-3: oklch(0.62 0.01 260);
+    --line: oklch(0.92 0.005 260);
+    --line-2: oklch(0.95 0.004 260);
+    --hover: oklch(0.97 0.004 260);
+    --header-bg: oklch(0.985 0.003 95);
+    --ben:    oklch(0.55 0.12 245);
+    --ben-bg: oklch(0.96 0.025 245);
+    --ben-br: oklch(0.88 0.05 245);
+    --rach:    oklch(0.55 0.12 305);
+    --rach-bg: oklch(0.96 0.025 305);
+    --rach-br: oklch(0.88 0.05 305);
+    --laura:    oklch(0.52 0.10 180);
+    --laura-bg: oklch(0.96 0.025 180);
+    --laura-br: oklch(0.86 0.05 180);
+    --warn:    oklch(0.55 0.14 25);
+    --warn-bg: oklch(0.97 0.02 25);
+    --warn-br: oklch(0.88 0.06 25);
+    --radius: 10px;
+    --radius-sm: 6px;
+    --row-py: 14px;
+    --row-px: 16px;
+    --stat-py: 18px;
+    --stat-val: 32px;
+    --base-fs: 14px;
+    --gap: 12px;
+  }
+  body.mood-midnight {
+    --bg: oklch(0.18 0.012 260); --surface: oklch(0.22 0.013 260);
+    --ink: oklch(0.96 0.005 260); --ink-2: oklch(0.78 0.008 260);
+    --ink-3: oklch(0.58 0.008 260); --line: oklch(0.30 0.012 260);
+    --line-2: oklch(0.26 0.012 260); --hover: oklch(0.26 0.013 260);
+    --header-bg: oklch(0.20 0.012 260);
+    --ben: oklch(0.78 0.13 245); --ben-bg: oklch(0.28 0.05 245); --ben-br: oklch(0.40 0.08 245);
+    --rach: oklch(0.78 0.13 305); --rach-bg: oklch(0.28 0.05 305); --rach-br: oklch(0.40 0.08 305);
+    --laura: oklch(0.78 0.11 180); --laura-bg: oklch(0.28 0.05 180); --laura-br: oklch(0.40 0.08 180);
+    --warn: oklch(0.78 0.14 25); --warn-bg: oklch(0.28 0.06 25); --warn-br: oklch(0.40 0.09 25);
+  }
+  body.mood-paper {
+    --bg: oklch(0.95 0.025 85); --surface: oklch(0.98 0.018 85);
+    --ink: oklch(0.22 0.03 50); --ink-2: oklch(0.42 0.025 50); --ink-3: oklch(0.58 0.02 60);
+    --line: oklch(0.86 0.03 75); --line-2: oklch(0.91 0.025 80);
+    --hover: oklch(0.93 0.03 80); --header-bg: oklch(0.93 0.03 80);
+  }
+  body.density-compact { --row-py: 8px; --row-px: 12px; --stat-py: 14px; --stat-val: 26px; --base-fs: 13px; --gap: 8px; }
+  body.density-roomy   { --row-py: 20px; --row-px: 22px; --stat-py: 26px; --stat-val: 38px; --base-fs: 15px; --gap: 16px; }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    background: var(--bg); color: var(--ink);
+    font-size: var(--base-fs); line-height: 1.45;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+    transition: background .25s ease, color .25s ease;
+  }
+  .mono { font-family: ui-monospace, 'JetBrains Mono', SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; }
+  .app { max-width: 1380px; margin: 0 auto; padding: 28px 32px 56px; }
+
+  header.top {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    gap: 24px; margin-bottom: 24px; padding-bottom: 18px;
+    border-bottom: 1px solid var(--line);
+  }
+  .title-block h1 { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; margin: 0 0 4px; }
+  .title-block .sub { color: var(--ink-3); font-size: 13px; }
+  .meta { display: flex; gap: 20px; align-items: center; color: var(--ink-3); font-size: 12px; }
+  .meta .dot {
+    width: 6px; height: 6px; border-radius: 999px;
+    background: oklch(0.65 0.14 145); display: inline-block;
+    margin-right: 6px; vertical-align: middle;
+  }
+  .meta .dot.warn { background: var(--warn); }
+  .meta .dot.idle { background: oklch(0.7 0.04 260); }
+
+  .daterow {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin-bottom: 16px; padding: 12px 14px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  }
+  .daterow .lbl { font-size: 12px; color: var(--ink-3); font-weight: 500; }
+  .daterow input[type=date] {
+    background: var(--surface); border: 1px solid var(--line); color: var(--ink);
+    border-radius: var(--radius-sm); padding: 6px 8px;
+    font: inherit; font-size: 12.5px; font-family: ui-monospace, monospace;
+    color-scheme: light; outline: none;
+  }
+  body.mood-midnight .daterow input[type=date] { color-scheme: dark; }
+  .daterow input[type=date]:focus { border-color: var(--ink); }
+  .preset {
+    background: transparent; border: 1px solid var(--line); color: var(--ink-2);
+    border-radius: var(--radius-sm); padding: 5px 9px;
+    font: inherit; font-size: 12px; cursor: pointer; transition: all .12s ease;
+  }
+  .preset:hover { border-color: var(--ink); color: var(--ink); }
+  .preset.active { background: var(--ink); border-color: var(--ink); color: var(--surface); }
+
+  .stats {
+    display: grid; grid-template-columns: repeat(5, 1fr); gap: var(--gap); margin-bottom: 24px;
+  }
+  @media (max-width: 1100px) { .stats { grid-template-columns: repeat(3, 1fr); } }
+  @media (max-width: 720px)  { .stats { grid-template-columns: repeat(2, 1fr); } }
+  .stat {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: var(--stat-py) calc(var(--stat-py) + 2px); cursor: pointer;
+    transition: border-color .15s ease, background .15s ease; user-select: none;
+  }
+  .stat:hover { border-color: oklch(0.84 0.01 260); }
+  body.mood-midnight .stat:hover { border-color: oklch(0.45 0.012 260); }
+  .stat.active { border-color: var(--ink); }
+  .stat .label {
+    font-size: 11px; font-weight: 500; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--ink-3);
+    display: flex; align-items: center; gap: 8px; margin-bottom: 12px;
+  }
+  .stat .label .swatch { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+  .stat .value {
+    font-family: ui-monospace, monospace; font-size: var(--stat-val); font-weight: 500;
+    letter-spacing: -0.02em; line-height: 1; color: var(--ink); font-variant-numeric: tabular-nums;
+  }
+  .stat .delta { margin-top: 8px; font-size: 12px; color: var(--ink-3); }
+  .stat.warn .value { color: var(--warn); }
+  .stat.warn.active { border-color: var(--warn); }
+
+  .toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 999px;
+    padding: 6px 12px; font: inherit; font-size: 12.5px; font-weight: 500;
+    color: var(--ink-2); cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+    transition: all .12s ease; user-select: none;
+  }
+  .chip:hover { border-color: oklch(0.82 0.01 260); color: var(--ink); }
+  body.mood-midnight .chip:hover { border-color: oklch(0.45 0.012 260); }
+  .chip .swatch { width: 7px; height: 7px; border-radius: 999px; display: inline-block; }
+  .chip.active { background: var(--ink); border-color: var(--ink); color: var(--surface); }
+  .chip.active .swatch { box-shadow: 0 0 0 1.5px var(--surface); }
+  .chip .count { font-family: ui-monospace, monospace; font-size: 11px; color: var(--ink-3); margin-left: 2px; }
+  .chip.active .count { color: oklch(0.85 0 0); }
+  .spacer { flex: 1; }
+
+  .search { position: relative; display: flex; align-items: center; }
+  .search input {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm);
+    padding: 7px 10px 7px 32px; font: inherit; font-size: 13px;
+    color: var(--ink); width: 240px; outline: none; transition: border-color .15s ease;
+  }
+  .search input:focus { border-color: var(--ink); }
+  .search svg { position: absolute; left: 10px; color: var(--ink-3); pointer-events: none; }
+
+  .exports { display: flex; gap: 6px; }
+  .btn {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm);
+    padding: 7px 12px; font: inherit; font-size: 12.5px; font-weight: 500;
+    color: var(--ink-2); cursor: pointer; transition: all .12s ease;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .btn:hover { border-color: var(--ink); color: var(--ink); }
+  .btn.primary { background: var(--ink); border-color: var(--ink); color: var(--surface); }
+  .btn.primary:hover { opacity: 0.85; }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  .table-wrap { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th {
+    text-align: left; font-weight: 500; font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--ink-3);
+    padding: 12px var(--row-px); border-bottom: 1px solid var(--line);
+    background: var(--header-bg); white-space: nowrap; cursor: pointer; user-select: none;
+  }
+  thead th .sort { display: inline-block; margin-left: 4px; color: var(--ink-3); opacity: 0.4; }
+  thead th.sorted .sort { opacity: 1; color: var(--ink); }
+  thead th.no-sort { cursor: default; }
+  tbody td {
+    padding: var(--row-py) var(--row-px); border-bottom: 1px solid var(--line-2);
+    vertical-align: top; color: var(--ink);
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr.flagged { background: color-mix(in oklab, var(--warn-bg) 45%, var(--surface)); }
+  tbody tr:hover { background: var(--hover); }
+  tbody tr.flagged:hover { background: color-mix(in oklab, var(--warn-bg) 65%, var(--surface)); }
+
+  td.patient .name { font-weight: 500; }
+  td.patient .pref { color: var(--ink-3); font-size: 12px; margin-left: 4px; }
+  td.patient .id { color: var(--ink-3); font-size: 11px; font-family: ui-monospace, monospace; margin-top: 2px; }
+  td.date { white-space: nowrap; font-family: ui-monospace, monospace; font-size: 12.5px; }
+  td.address .a1 { color: var(--ink); }
+  td.address .a2 { color: var(--ink-3); font-size: 12px; margin-top: 2px; }
+  td.note { color: var(--ink-2); font-size: 12.5px; max-width: 280px; }
+  td.note .text { font-style: italic; color: var(--ink-2); }
+  td.note .text::before { content: '\201C'; }
+  td.note .text::after { content: '\201D'; }
+  td.note .none { color: var(--ink-3); font-style: normal; }
+  td.note .audit {
+    margin-top: 6px; display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11.5px; color: var(--warn);
+  }
+  td.note .audit-dot { width: 5px; height: 5px; border-radius: 999px; background: var(--warn); }
+
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 9px 3px 8px; border-radius: 999px;
+    font-size: 12px; font-weight: 500; border: 1px solid; white-space: nowrap;
+  }
+  .pill .dot { width: 6px; height: 6px; border-radius: 999px; }
+  .pill.ben    { color: var(--ben);   background: var(--ben-bg);   border-color: var(--ben-br); }
+  .pill.ben    .dot { background: var(--ben); }
+  .pill.rach   { color: var(--rach);  background: var(--rach-bg);  border-color: var(--rach-br); }
+  .pill.rach   .dot { background: var(--rach); }
+  .pill.laura  { color: var(--laura); background: var(--laura-bg); border-color: var(--laura-br); }
+  .pill.laura  .dot { background: var(--laura); }
+  .pill.other  { color: var(--ink-2); background: color-mix(in oklab, var(--ink) 6%, var(--surface)); border-color: var(--line); }
+  .pill.other  .dot { background: var(--ink-3); }
+
+  body.emp-stripes tbody td:first-child { border-left: 3px solid transparent; }
+  body.emp-stripes tbody tr.doc-DOCB td:first-child { border-left-color: var(--ben); }
+  body.emp-stripes tbody tr.doc-DOCR td:first-child { border-left-color: var(--rach); }
+  body.emp-stripes tbody tr.doc-DRYE td:first-child { border-left-color: var(--laura); }
+  body.emp-stripes .pill { background: transparent; border-color: var(--line); }
+
+  body.emp-tonal tbody tr.doc-DOCB { background: color-mix(in oklab, var(--ben-bg) 55%, var(--surface)); }
+  body.emp-tonal tbody tr.doc-DOCR { background: color-mix(in oklab, var(--rach-bg) 55%, var(--surface)); }
+  body.emp-tonal tbody tr.doc-DRYE { background: color-mix(in oklab, var(--laura-bg) 55%, var(--surface)); }
+  body.emp-tonal tbody tr.flagged { background: color-mix(in oklab, var(--warn-bg) 60%, var(--surface)) !important; }
+  body.emp-tonal tbody tr:hover { filter: brightness(0.97); }
+  body.mood-midnight.emp-tonal tbody tr:hover { filter: brightness(1.15); }
+
+  .src {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 11.5px; color: var(--ink-2);
+    padding: 2px 7px; border-radius: 4px;
+    background: color-mix(in oklab, var(--ink) 6%, var(--surface));
+    border: 1px solid var(--line); font-weight: 500;
+  }
+  .src.note { color: var(--ink); }
+  .src.exam-proc {
+    color: oklch(from var(--warn) calc(l + 0.05) c calc(h - 35));
+    background: color-mix(in oklab, oklch(0.7 0.12 60) 14%, var(--surface));
+    border-color: color-mix(in oklab, oklch(0.7 0.12 60) 25%, var(--line));
+  }
+  .src.proc { color: var(--ink-2); }
+  .src::before { content: ''; width: 4px; height: 4px; border-radius: 999px; background: currentColor; opacity: 0.7; }
+
+  .pager {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 16px; border-top: 1px solid var(--line);
+    background: var(--header-bg); font-size: 12.5px; color: var(--ink-3);
+    flex-wrap: wrap; gap: 8px;
+  }
+  .pager .pages { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+  .page-btn {
+    background: transparent; border: 1px solid transparent; border-radius: 5px;
+    padding: 5px 9px; font: inherit; font-size: 12.5px; color: var(--ink-2);
+    cursor: pointer; min-width: 28px; font-family: ui-monospace, monospace;
+  }
+  .page-btn:hover { background: var(--surface); border-color: var(--line); color: var(--ink); }
+  .page-btn.active { background: var(--ink); border-color: var(--ink); color: var(--surface); }
+  .page-btn:disabled { opacity: 0.35; cursor: default; }
+  .page-btn:disabled:hover { background: transparent; border-color: transparent; }
+
+  .empty { padding: 56px 24px; text-align: center; color: var(--ink-3); }
+  .empty .big { font-size: 15px; color: var(--ink-2); margin-bottom: 4px; }
+  .loading { padding: 48px 24px; text-align: center; color: var(--ink-3); }
+  .spinner {
+    display: inline-block; width: 18px; height: 18px;
+    border: 2px solid var(--line); border-top-color: var(--ink-2);
+    border-radius: 50%; animation: spin 0.7s linear infinite;
+    margin-right: 8px; vertical-align: middle;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .toast {
+    position: fixed; bottom: 24px; left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: var(--ink); color: var(--surface);
+    padding: 9px 16px; border-radius: 8px; font-size: 13px;
+    opacity: 0; transition: all .25s ease; pointer-events: none;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.18); z-index: 100;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.err { background: var(--warn); }
+
+  .tweaks { position: fixed; right: 16px; bottom: 16px; z-index: 50; font-family: inherit; }
+  .tweaks-toggle {
+    background: var(--surface); border: 1px solid var(--line); color: var(--ink-2);
+    border-radius: 999px; padding: 8px 14px;
+    font: inherit; font-size: 12px; font-weight: 500; cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .tweaks-toggle:hover { color: var(--ink); }
+  .tweaks-panel {
+    position: absolute; right: 0; bottom: 44px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 14px 16px; width: 240px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.12); display: none;
+  }
+  .tweaks-panel.open { display: block; }
+  .tweaks-panel h4 { margin: 0 0 4px; font-size: 13px; font-weight: 600; color: var(--ink); }
+  .tweak-section { margin-top: 12px; }
+  .tweak-section .lab {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--ink-3); margin-bottom: 6px;
+  }
+  .tweak-radio { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+  .tweak-radio button {
+    background: transparent; border: 1px solid var(--line); color: var(--ink-2);
+    border-radius: var(--radius-sm); padding: 4px 10px;
+    font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .tweak-radio button.on { background: var(--ink); border-color: var(--ink); color: var(--surface); }
+  .tweak-section select {
+    width: 100%; background: var(--surface); border: 1px solid var(--line);
+    color: var(--ink); border-radius: var(--radius-sm);
+    padding: 5px 8px; font: inherit; font-size: 12.5px;
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="title-block">
+      <h1>New Patient Tracker</h1>
+      <div class="sub">Huntington Beach Dental Center &middot; live from Open Dental</div>
+    </div>
+    <div class="meta">
+      <span id="syncStatus"><span class="dot idle"></span>Not loaded</span>
+      <span class="mono">v1.0</span>
+    </div>
+  </header>
+
+  <div class="daterow">
+    <span class="lbl">Range</span>
+    <input type="date" id="fromDate" />
+    <span class="lbl mono" style="opacity:.6">&rarr;</span>
+    <input type="date" id="toDate" />
+    <button class="preset" data-preset="last7">Last 7d</button>
+    <button class="preset" data-preset="last30">Last 30d</button>
+    <button class="preset" data-preset="thisMonth">This month</button>
+    <button class="preset" data-preset="lastMonth">Last month</button>
+    <span class="spacer" style="flex:1"></span>
+    <button class="btn primary" id="loadBtn">Refresh</button>
+  </div>
+
+  <div class="stats" id="stats"></div>
+
+  <div class="toolbar">
+    <div class="chips" id="chips"></div>
+    <div class="spacer"></div>
+    <div class="search">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input type="text" id="search" placeholder="Search name, address, note&hellip;" />
+    </div>
+    <div class="exports">
+      <button class="btn" data-export="csv"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>CSV</button>
+      <button class="btn" data-export="tsv">TSV</button>
+      <button class="btn" data-export="xlsx">XLSX</button>
+      <button class="btn" data-export="json">JSON</button>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr id="thead"></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <div class="pager" id="pager"></div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<div class="tweaks">
+  <button class="tweaks-toggle" id="tweaksToggle" title="Tweaks">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    Tweaks
+  </button>
+  <div class="tweaks-panel" id="tweaksPanel">
+    <h4>Tweaks</h4>
+    <div class="tweak-section">
+      <div class="lab">Mood</div>
+      <div class="tweak-radio" data-tweak="mood">
+        <button data-v="clinical">Clinical</button>
+        <button data-v="midnight">Midnight</button>
+        <button data-v="paper">Paper</button>
+      </div>
+    </div>
+    <div class="tweak-section">
+      <div class="lab">Density</div>
+      <div class="tweak-radio" data-tweak="density">
+        <button data-v="compact">Compact</button>
+        <button data-v="comfortable">Comfort</button>
+        <button data-v="roomy">Roomy</button>
+      </div>
+    </div>
+    <div class="tweak-section">
+      <div class="lab">Provider emphasis</div>
+      <div class="tweak-radio" data-tweak="emphasis">
+        <button data-v="pills">Pills</button>
+        <button data-v="stripes">Stripes</button>
+        <button data-v="tonal">Tonal</button>
+      </div>
+    </div>
+    <div class="tweak-section">
+      <div class="lab">Rows per page</div>
+      <select id="perPageSel">
+        <option value="10">10</option>
+        <option value="25">25</option>
+        <option value="50">50</option>
+        <option value="100">100</option>
+        <option value="9999">Show all</option>
+      </select>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── API endpoint (relative to this page) ────────────────
+const API_URL = './api/new-patients';
+
+const DOCS = {
+  DOCB: { name: 'Dr. Ben',         klass: 'ben'   },
+  DOCR: { name: 'Dr. Rachel',      klass: 'rach'  },
+  DRYE: { name: 'Dr. Laura / Ye',  klass: 'laura' },
+};
+const SOURCE_LABELS = {
+  'note': 'Note', 'exam-proc': 'Exam proc', 'proc': 'Procedure', 'appt': 'Appt', 'none': 'None',
+};
+const TWEAK_DEFAULTS = { mood: 'clinical', density: 'compact', emphasis: 'tonal', perPage: 100 };
+
+let allPatients = [];
+let docFilter = 'all';
+let search = '';
+let sort = { key: 'DateFirstVisit', dir: 'asc' };
+let page = 1;
+let tweaks = loadTweaks();
+
+function loadTweaks() {
+  try {
+    const raw = localStorage.getItem('npt-tweaks');
+    if (raw) return Object.assign({}, TWEAK_DEFAULTS, JSON.parse(raw));
+  } catch (e) {}
+  return Object.assign({}, TWEAK_DEFAULTS);
+}
+function saveTweaks() { try { localStorage.setItem('npt-tweaks', JSON.stringify(tweaks)); } catch (e) {} }
+function applyTweaks() {
+  const b = document.body;
+  ['mood-clinical','mood-midnight','mood-paper'].forEach(c => b.classList.remove(c));
+  b.classList.add('mood-' + tweaks.mood);
+  ['density-compact','density-comfortable','density-roomy'].forEach(c => b.classList.remove(c));
+  b.classList.add('density-' + tweaks.density);
+  ['emp-pills','emp-stripes','emp-tonal'].forEach(c => b.classList.remove(c));
+  b.classList.add('emp-' + tweaks.emphasis);
+  document.querySelectorAll('.tweak-radio').forEach(group => {
+    const key = group.dataset.tweak;
+    group.querySelectorAll('button').forEach(btn => {
+      btn.classList.toggle('on', btn.dataset.v === tweaks[key]);
+    });
+  });
+  const sel = document.getElementById('perPageSel');
+  if (sel) sel.value = String(tweaks.perPage);
+}
+
+function ymd(d) {
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+function fmtDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso + 'T00:00:00');
+  if (isNaN(d)) return iso;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+function fmtName(p) { return (p.LName||'').trim() + ', ' + (p.FName||'').trim(); }
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+function titleCase(s) {
+  if (!s) return '';
+  const letters = s.replace(/[^A-Za-z]/g,'');
+  if (!letters.length) return s;
+  const upperRatio = (s.match(/[A-Z]/g)?.length || 0) / letters.length;
+  if (upperRatio < 0.7) return s;
+  return s.toLowerCase().replace(/\b([a-z])/g, (_, c) => c.toUpperCase())
+    .replace(/\b(Po|Ca|Il|Ny|Tx|Wa|Or|Az|Nv)\b/g, m => m.toUpperCase())
+    .replace(/\bPo Box\b/g, 'PO Box');
+}
+function isAttributionMismatch(audit) { return !!audit && /!=\s*billed/.test(audit); }
+
+function setRange(preset) {
+  const t = new Date();
+  let f, to = t;
+  if (preset === 'last7')      { f = new Date(t); f.setDate(t.getDate() - 6); }
+  else if (preset === 'last30'){ f = new Date(t); f.setDate(t.getDate() - 29); }
+  else if (preset === 'thisMonth') { f = new Date(t.getFullYear(), t.getMonth(), 1); }
+  else if (preset === 'lastMonth') {
+    f = new Date(t.getFullYear(), t.getMonth() - 1, 1);
+    to = new Date(t.getFullYear(), t.getMonth(), 0);
+  }
+  if (f) document.getElementById('fromDate').value = ymd(f);
+  if (to) document.getElementById('toDate').value = ymd(to);
+  highlightActivePreset(preset);
+}
+function highlightActivePreset(preset) {
+  document.querySelectorAll('.preset').forEach(b => {
+    b.classList.toggle('active', b.dataset.preset === preset);
+  });
+}
+
+function setSync(state, text) {
+  const el = document.getElementById('syncStatus');
+  let dotClass = 'idle';
+  if (state === 'ok') dotClass = '';
+  else if (state === 'err') dotClass = 'warn';
+  el.innerHTML = '<span class="dot ' + dotClass + '"></span>' + escapeHtml(text);
+}
+function showToast(msg, err) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.toggle('err', !!err);
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+async function loadData() {
+  const from = document.getElementById('fromDate').value;
+  const to = document.getElementById('toDate').value;
+  if (!from || !to) { showToast('Pick a date range', true); return; }
+  if (from > to)    { showToast('From date is after To date', true); return; }
+
+  const btn = document.getElementById('loadBtn');
+  btn.disabled = true;
+  const oldLabel = btn.textContent;
+  btn.textContent = 'Loading…';
+  setSync('loading', 'Loading…');
+  document.getElementById('tbody').innerHTML =
+    '<tr><td colspan="6"><div class="loading"><span class="spinner"></span>Fetching from Open Dental…</div></td></tr>';
+
+  try {
+    const url = API_URL + '?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to);
+    const resp = await fetch(url, { credentials: 'same-origin' });
+    if (!resp.ok) {
+      let detail = resp.statusText;
+      try { const j = await resp.json(); if (j && j.error) detail = j.error; } catch (e) {}
+      throw new Error('HTTP ' + resp.status + ': ' + detail);
+    }
+    const data = await resp.json();
+    allPatients = Array.isArray(data) ? data : [];
+    page = 1;
+    docFilter = 'all';
+    render();
+    setSync('ok', 'Synced · ' + new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }));
+    showToast('Loaded ' + allPatients.length + ' patient' + (allPatients.length === 1 ? '' : 's'));
+  } catch (e) {
+    setSync('err', 'Load failed');
+    document.getElementById('tbody').innerHTML =
+      '<tr><td colspan="6"><div class="empty"><div class="big">Error loading data</div><div>' + escapeHtml(e.message || String(e)) + '</div></div></td></tr>';
+    showToast(e.message || 'Load failed', true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = oldLabel;
+  }
+}
+
+function computeStats() {
+  const s = { total: allPatients.length, DOCB: 0, DOCR: 0, DRYE: 0, OTHER: 0, flagged: 0 };
+  allPatients.forEach(p => {
+    if (s[p.ResolvedProvider] != null) s[p.ResolvedProvider]++;
+    else s.OTHER++;
+    if (isAttributionMismatch(p.Audit)) s.flagged++;
+  });
+  return s;
+}
+function getFilteredRows() {
+  let rows = allPatients.slice();
+  if (docFilter === 'flagged') rows = rows.filter(p => isAttributionMismatch(p.Audit));
+  else if (docFilter !== 'all') rows = rows.filter(p => p.ResolvedProvider === docFilter);
+  if (search.trim()) {
+    const q = search.trim().toLowerCase();
+    rows = rows.filter(p =>
+      [p.FName, p.LName, p.Preferred, p.Address, p.CityStateZip, p.NoteMatchedText, String(p.PatNum)]
+        .some(v => v && String(v).toLowerCase().includes(q))
+    );
+  }
+  rows.sort((a, b) => {
+    const k = sort.key;
+    let av, bv;
+    if (k === 'name') { av = fmtName(a).toLowerCase(); bv = fmtName(b).toLowerCase(); }
+    else if (k === 'doctor') {
+      av = (DOCS[a.ResolvedProvider] && DOCS[a.ResolvedProvider].name) || a.ResolvedProvider || '';
+      bv = (DOCS[b.ResolvedProvider] && DOCS[b.ResolvedProvider].name) || b.ResolvedProvider || '';
+    } else { av = a[k]; bv = b[k]; }
+    if (av == null) av = '';
+    if (bv == null) bv = '';
+    if (av < bv) return sort.dir === 'asc' ? -1 : 1;
+    if (av > bv) return sort.dir === 'asc' ?  1 : -1;
+    return 0;
+  });
+  return rows;
+}
+function renderStats() {
+  const s = computeStats();
+  const card = (label, value, delta, opts) => {
+    opts = opts || {};
+    const swatch = opts.swatch ? '<span class="swatch" style="background:' + opts.swatch + '"></span>' : '';
+    return '<div class="stat ' + (opts.warn ? 'warn' : '') + ' ' + (opts.active ? 'active' : '') + '" data-filter="' + opts.filter + '">' +
+      '<div class="label">' + swatch + label + '</div>' +
+      '<div class="value">' + value + '</div>' +
+      '<div class="delta">' + delta + '</div>' +
+    '</div>';
+  };
+  const fromV = document.getElementById('fromDate').value;
+  const toV = document.getElementById('toDate').value;
+  const rangeLabel = (fromV && toV) ? (fmtDate(fromV) + ' – ' + fmtDate(toV)) : '';
+  const pct = (a) => s.total ? Math.round((a / s.total) * 100) : 0;
+  document.getElementById('stats').innerHTML =
+    card('Total new patients', s.total, rangeLabel, { filter: 'all', active: docFilter === 'all' }) +
+    card('Dr. Ben',  s.DOCB, pct(s.DOCB) + '% of intake',  { filter: 'DOCB', swatch: 'var(--ben)',   active: docFilter === 'DOCB' }) +
+    card('Dr. Rachel', s.DOCR, pct(s.DOCR) + '% of intake',{ filter: 'DOCR', swatch: 'var(--rach)',  active: docFilter === 'DOCR' }) +
+    card('Dr. Laura / Ye', s.DRYE, pct(s.DRYE) + '% of intake', { filter: 'DRYE', swatch: 'var(--laura)', active: docFilter === 'DRYE' }) +
+    card('Attribution flags', s.flagged, 'Note ≠ billed provider', { filter: 'flagged', warn: true, active: docFilter === 'flagged' });
+  document.querySelectorAll('.stat').forEach(el => {
+    el.onclick = () => {
+      const f = el.dataset.filter;
+      docFilter = (docFilter === f && f !== 'all') ? 'all' : f;
+      page = 1;
+      render();
+    };
+  });
+}
+function renderChips() {
+  const s = computeStats();
+  const chip = (key, label, swatch) => {
+    return '<button class="chip ' + (docFilter === key ? 'active' : '') + '" data-filter="' + key + '">' +
+      (swatch ? '<span class="swatch" style="background:' + swatch + '"></span>' : '') +
+      label + ' <span class="count">' + chipCount(key, s) + '</span>' +
+    '</button>';
+  };
+  document.getElementById('chips').innerHTML =
+    chip('all', 'All') +
+    chip('DOCB', 'Dr. Ben', 'var(--ben)') +
+    chip('DOCR', 'Dr. Rachel', 'var(--rach)') +
+    chip('DRYE', 'Dr. Laura/Ye', 'var(--laura)') +
+    chip('flagged', 'Flagged only', 'var(--warn)');
+  document.querySelectorAll('.chip').forEach(el => {
+    el.onclick = () => { docFilter = el.dataset.filter; page = 1; render(); };
+  });
+}
+function chipCount(key, s) {
+  if (key === 'all') return s.total;
+  if (key === 'flagged') return s.flagged;
+  return s[key] || 0;
+}
+function renderHead() {
+  const cols = [
+    { label: 'Patient',     key: 'name' },
+    { label: 'First visit', key: 'DateFirstVisit' },
+    { label: 'Address',     key: 'Address' },
+    { label: 'Doctor',      key: 'doctor' },
+    { label: 'Source',      key: 'ResolvedSource' },
+    { label: 'Note / flag', key: null },
+  ];
+  document.getElementById('thead').innerHTML = cols.map(c => {
+    const isSorted = c.key && sort.key === c.key;
+    const arrow = !c.key ? '' : (isSorted ? (sort.dir === 'asc' ? '↑' : '↓') : '↕');
+    return '<th data-key="' + (c.key || '') + '" class="' + (isSorted ? 'sorted' : '') + ' ' + (!c.key ? 'no-sort' : '') + '">' + c.label + (c.key ? ('<span class="sort">' + arrow + '</span>') : '') + '</th>';
+  }).join('');
+  document.querySelectorAll('thead th').forEach(th => {
+    th.onclick = () => {
+      const k = th.dataset.key;
+      if (!k) return;
+      if (sort.key === k) sort.dir = sort.dir === 'asc' ? 'desc' : 'asc';
+      else { sort.key = k; sort.dir = 'asc'; }
+      render();
+    };
+  });
+}
+function renderTable() {
+  const rows = getFilteredRows();
+  const PER_PAGE = tweaks.perPage;
+  const totalPages = Math.max(1, Math.ceil(rows.length / PER_PAGE));
+  if (page > totalPages) page = totalPages;
+  const pageRows = rows.slice((page - 1) * PER_PAGE, page * PER_PAGE);
+  const tbody = document.getElementById('tbody');
+  if (rows.length === 0) {
+    tbody.innerHTML = allPatients.length === 0
+      ? '<tr><td colspan="6"><div class="empty"><div class="big">No data loaded yet</div><div>Pick a date range and click Refresh.</div></div></td></tr>'
+      : '<tr><td colspan="6"><div class="empty"><div class="big">No matching patients</div><div>Try adjusting filters or clearing the search.</div></div></td></tr>';
+  } else {
+    tbody.innerHTML = pageRows.map(p => {
+      const doc = DOCS[p.ResolvedProvider];
+      const flagged = isAttributionMismatch(p.Audit);
+      const docCell = doc
+        ? '<span class="pill ' + doc.klass + '"><span class="dot"></span>' + escapeHtml(doc.name) + '</span>'
+        : '<span class="pill other"><span class="dot"></span>' + escapeHtml(p.ResolvedProvider || '—') + '</span>';
+      const noteCell = p.NoteMatchedText
+        ? '<span class="text">' + escapeHtml(p.NoteMatchedText) + '</span>'
+        : '<span class="none">— no clinical note —</span>';
+      const auditCell = flagged
+        ? '<div class="audit" title="' + escapeHtml(p.Audit) + '"><span class="audit-dot"></span>Note doctor differs from billed</div>'
+        : '';
+      const pref = (p.Preferred && p.Preferred !== p.FName)
+        ? '<span class="pref">“' + escapeHtml(p.Preferred) + '”</span>' : '';
+      const srcKey = p.ResolvedSource || '';
+      return '<tr class="doc-' + (p.ResolvedProvider || '') + ' ' + (flagged ? 'flagged' : '') + '">' +
+        '<td class="patient"><div><span class="name">' + escapeHtml((p.LName||'').trim()) + ', ' + escapeHtml((p.FName||'').trim()) + '</span>' + pref + '</div><div class="id">#' + escapeHtml(String(p.PatNum||'')) + '</div></td>' +
+        '<td class="date">' + escapeHtml(fmtDate(p.DateFirstVisit)) + '</td>' +
+        '<td class="address"><div class="a1">' + escapeHtml(titleCase((p.Address||'').trim())) + '</div><div class="a2">' + escapeHtml(titleCase((p.CityStateZip||'').trim())) + '</div></td>' +
+        '<td>' + docCell + '</td>' +
+        '<td><span class="src ' + srcKey + '">' + escapeHtml(SOURCE_LABELS[srcKey] || srcKey || '—') + '</span></td>' +
+        '<td class="note">' + noteCell + auditCell + '</td>' +
+      '</tr>';
+    }).join('');
+  }
+  const pager = document.getElementById('pager');
+  const start = rows.length === 0 ? 0 : (page - 1) * PER_PAGE + 1;
+  const end = Math.min(page * PER_PAGE, rows.length);
+  let pageButtons = '';
+  for (let n = 1; n <= totalPages; n++) {
+    pageButtons += '<button class="page-btn ' + (n === page ? 'active' : '') + '" data-page="' + n + '">' + n + '</button>';
+  }
+  pager.innerHTML =
+    '<div>Showing <span class="mono">' + start + '</span>–<span class="mono">' + end + '</span> of <span class="mono">' + rows.length + '</span></div>' +
+    '<div class="pages">' +
+      '<button class="page-btn" data-page="prev"' + (page === 1 ? ' disabled' : '') + '>‹</button>' +
+      pageButtons +
+      '<button class="page-btn" data-page="next"' + (page === totalPages ? ' disabled' : '') + '>›</button>' +
+    '</div>';
+  pager.querySelectorAll('.page-btn').forEach(btn => {
+    btn.onclick = () => {
+      const v = btn.dataset.page;
+      if (v === 'prev') page = Math.max(1, page - 1);
+      else if (v === 'next') page = Math.min(totalPages, page + 1);
+      else page = Number(v);
+      render();
+    };
+  });
+}
+function render() { renderStats(); renderChips(); renderHead(); renderTable(); }
+
+function downloadBlob(filename, content, mime) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+function todayStr() { return ymd(new Date()); }
+function exportData(type) {
+  const rows = getFilteredRows();
+  if (rows.length === 0) { showToast('Nothing to export', true); return; }
+  const escCsv = v => {
+    if (v == null) return '';
+    const s = String(v);
+    return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const escTsv = v => v == null ? '' : String(v).replace(/[\t\n\r]/g, ' ');
+  const headers = ['Patient #','Last','First','Preferred','First visit','Address','City / state / zip','Doctor','Source','Note matched','Audit'];
+  const aoa = rows.map(r => [
+    r.PatNum, r.LName, r.FName, r.Preferred || '', r.DateFirstVisit,
+    r.Address, r.CityStateZip,
+    (DOCS[r.ResolvedProvider] && DOCS[r.ResolvedProvider].name) || r.ResolvedProvider || '',
+    SOURCE_LABELS[r.ResolvedSource] || r.ResolvedSource || '',
+    r.NoteMatchedText || '', r.Audit || ''
+  ]);
+  const date = todayStr();
+  if (type === 'csv') {
+    const text = [headers].concat(aoa).map(row => row.map(escCsv).join(',')).join('\n');
+    downloadBlob('new-patients-' + date + '.csv', text, 'text/csv;charset=utf-8');
+  } else if (type === 'tsv') {
+    const text = [headers].concat(aoa).map(row => row.map(escTsv).join('\t')).join('\n');
+    downloadBlob('new-patients-' + date + '.tsv', text, 'text/tab-separated-values;charset=utf-8');
+  } else if (type === 'xlsx') {
+    const text = [headers].concat(aoa).map(row => row.map(escTsv).join('\t')).join('\n');
+    downloadBlob('new-patients-' + date + '.xls', text, 'application/vnd.ms-excel');
+  } else if (type === 'json') {
+    downloadBlob('new-patients-' + date + '.json', JSON.stringify(rows, null, 2), 'application/json');
+  }
+  showToast('Exported ' + rows.length + ' row' + (rows.length === 1 ? '' : 's') + ' to ' + type.toUpperCase());
+}
+
+function init() {
+  applyTweaks();
+  document.querySelectorAll('.tweak-radio').forEach(group => {
+    const key = group.dataset.tweak;
+    group.querySelectorAll('button').forEach(btn => {
+      btn.onclick = () => { tweaks[key] = btn.dataset.v; saveTweaks(); applyTweaks(); };
+    });
+  });
+  document.getElementById('perPageSel').onchange = e => {
+    tweaks.perPage = Number(e.target.value); saveTweaks(); page = 1; render();
+  };
+  document.getElementById('tweaksToggle').onclick = () => {
+    document.getElementById('tweaksPanel').classList.toggle('open');
+  };
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.tweaks')) document.getElementById('tweaksPanel').classList.remove('open');
+  });
+
+  document.querySelectorAll('.preset').forEach(b => {
+    b.onclick = () => { setRange(b.dataset.preset); loadData(); };
+  });
+  document.getElementById('fromDate').addEventListener('change', () => highlightActivePreset(null));
+  document.getElementById('toDate').addEventListener('change', () => highlightActivePreset(null));
+  document.getElementById('loadBtn').onclick = loadData;
+  document.getElementById('search').oninput = e => { search = e.target.value; page = 1; render(); };
+  document.querySelectorAll('[data-export]').forEach(b => {
+    b.onclick = () => exportData(b.dataset.export);
+  });
+
+  setRange('last7');
+  render();
+  loadData();
+}
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+else init();
+</script>
+</body>
+</html>

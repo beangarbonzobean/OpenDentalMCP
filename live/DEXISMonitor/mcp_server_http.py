@@ -7,8 +7,11 @@ import json
 import logging
 import os
 import sys
+import secrets
+from pathlib import Path
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from functools import wraps
 from typing import Any, Dict, Optional
 
 from mcp_tools import (
@@ -39,7 +42,61 @@ logger = logging.getLogger(__name__)
 
 # Create Flask app
 app = Flask(__name__)
-CORS(app)  # Enable CORS for cross-origin requests
+
+# --- CORS: only allow specific trusted origins ---
+ALLOWED_ORIGINS = [
+    "https://opendental-mcp.huntingtonbeachdentalcenter.com",
+    "https://dexis-mcp.huntingtonbeachdentalcenter.com",
+    "http://192.168.127.49:8443",
+    "http://localhost:8443",
+]
+CORS(app, origins=ALLOWED_ORIGINS, supports_credentials=True)
+
+
+# --- Bearer token auth ---
+TOKEN_FILE = Path(__file__).parent / ".mcp_token"
+
+
+def load_or_create_token() -> str:
+    """Load bearer token from env or file, or generate one."""
+    token = os.environ.get("MCP_API_TOKEN")
+    if token:
+        return token
+    if TOKEN_FILE.exists():
+        return TOKEN_FILE.read_text().strip()
+    # First run: generate a secure token and persist it
+    token = secrets.token_urlsafe(48)
+    TOKEN_FILE.write_text(token)
+    logger.info(f"Generated new MCP API token → {TOKEN_FILE}")
+    return token
+
+
+API_TOKEN = load_or_create_token()
+
+
+def require_auth(f):
+    """Decorator that enforces bearer token auth on a route.
+    Accepts token via Authorization header OR ?token= query parameter.
+    OPTIONS requests are exempt (CORS preflight doesn't carry auth headers)."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if request.method == 'OPTIONS':
+            return f(*args, **kwargs)
+        # Check Authorization header first, then query parameter fallback
+        provided = None
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            provided = auth_header[len("Bearer "):]
+        else:
+            provided = request.args.get("token")
+        if not provided:
+            logger.warning(f"Auth missing from {request.remote_addr}")
+            return jsonify({"error": "Authorization required (header or ?token= param)"}), 401
+        if not secrets.compare_digest(provided, API_TOKEN):
+            logger.warning(f"Invalid token from {request.remote_addr}")
+            return jsonify({"error": "Invalid token"}), 403
+        return f(*args, **kwargs)
+    return decorated
 
 # Load config
 def load_config() -> Dict:
@@ -360,12 +417,14 @@ def health():
 
 
 @app.route('/tools', methods=['GET'])
+@require_auth
 def get_tools():
     """Get list of available tools."""
     return jsonify({"tools": TOOLS}), 200
 
 
 @app.route('/tools/<tool_name>', methods=['GET'])
+@require_auth
 def get_tool_info(tool_name: str):
     """Get information about a specific tool."""
     tool = next((t for t in TOOLS if t["name"] == tool_name), None)
@@ -375,6 +434,7 @@ def get_tool_info(tool_name: str):
 
 
 @app.route('/tools/<tool_name>/call', methods=['POST'])
+@require_auth
 def call_tool(tool_name: str):
     """Call a tool with arguments."""
     try:
@@ -406,19 +466,15 @@ def call_tool(tool_name: str):
 
 
 @app.route('/mcp', methods=['GET', 'POST', 'OPTIONS'])
+@require_auth
 def mcp_endpoint():
     """MCP protocol endpoint for compatibility."""
-    # Log all requests (both to file and console)
-    print(f"[MCP] {request.method} request from {request.remote_addr}")
-    logger.info(f"MCP endpoint called: {request.method} from {request.remote_addr}")
-    logger.info(f"Headers: {dict(request.headers)}")
-    print(f"[MCP] Headers: {dict(request.headers)}")
+    logger.info(f"MCP {request.method} from {request.remote_addr}")
     
     # Handle OPTIONS requests (CORS preflight; Claude/browser clients send Accept + MCP headers)
     if request.method == 'OPTIONS':
         logger.info("Handling OPTIONS request")
         response = jsonify({})
-        response.headers.add('Access-Control-Allow-Origin', '*')
         response.headers.add(
             'Access-Control-Allow-Headers',
             'Content-Type, Authorization, Accept, Mcp-Session-Id, Mcp-Protocol-Version, Last-Event-ID',
@@ -446,8 +502,7 @@ def mcp_endpoint():
     # Handle POST requests (actual MCP protocol)
     try:
         data = request.get_json()
-        print(f"[MCP] POST request data: {json.dumps(data, indent=2)}")
-        logger.info(f"POST request data: {json.dumps(data, indent=2)}")
+        logger.debug(f"POST request data: {json.dumps(data)}")
         
         if not data:
             return jsonify({

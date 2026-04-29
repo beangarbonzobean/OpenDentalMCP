@@ -35,9 +35,12 @@ DEFAULT_PROCEDURE_CODES = {
 
 
 def load_config(config_path: str = None) -> dict:
-    """Load configuration from voice_drop_config.json."""
+    """Load configuration. Prefers voice_drop_config.prod.json (gitignored,
+    holds real secrets) and falls back to voice_drop_config.json (template)."""
     if config_path is None:
-        config_path = Path(__file__).parent / "voice_drop_config.json"
+        base = Path(__file__).parent
+        prod_path = base / "voice_drop_config.prod.json"
+        config_path = prod_path if prod_path.exists() else base / "voice_drop_config.json"
     with open(config_path) as f:
         config = json.load(f)
 
@@ -109,7 +112,7 @@ def get_completed_major_procedures(config: dict, target_date: str) -> list:
     sql = f"""
     SELECT pl.ProcNum, pl.PatNum, pl.ProcDate, pl.ProcStatus,
            pc.ProcCode, pc.Descript AS ProcDescription, pl.ProvNum,
-           p.FName, p.LName, p.WirelessPhone, p.HmPhone
+           p.FName, p.LName, p.WirelessPhone, p.HmPhone, p.Zip
     FROM procedurelog pl
     JOIN procedurecode pc ON pl.CodeNum = pc.CodeNum
     JOIN patient p ON pl.PatNum = p.PatNum
@@ -149,6 +152,7 @@ def filter_patients(config: dict, procedures: list) -> list:
                 "FName": proc.get("FName", ""),
                 "LName": proc.get("LName", ""),
                 "WirelessPhone": phone,
+                "Zip": proc.get("Zip", ""),
                 "procedures": [],
             }
         patient_map[pat_num]["procedures"].append({
@@ -159,17 +163,21 @@ def filter_patients(config: dict, procedures: list) -> list:
 
     patients = list(patient_map.values())
 
-    # Test mode filter
+    # Test mode filter — supports single name string or list of names
     if config.get("test_mode"):
-        test_name = config.get("test_patient_name", "Ben Young")
-        parts = test_name.strip().split()
-        first = parts[0].lower() if parts else ""
-        last = parts[-1].lower() if len(parts) > 1 else ""
+        test_names_raw = config.get("test_patient_names") or [config.get("test_patient_name", "Ben Young")]
+        if isinstance(test_names_raw, str):
+            test_names_raw = [test_names_raw]
+        allowed = set()
+        for name in test_names_raw:
+            parts = name.strip().split()
+            if len(parts) >= 2:
+                allowed.add((parts[0].lower(), parts[-1].lower()))
         patients = [
             p for p in patients
-            if p["FName"].lower() == first and p["LName"].lower() == last
+            if (p["FName"].strip().lower(), p["LName"].strip().lower()) in allowed
         ]
-        logger.info(f"Test mode: filtered to {len(patients)} patient(s) matching '{test_name}'")
+        logger.info(f"Test mode: filtered to {len(patients)} patient(s) matching {test_names_raw}")
 
     # Skip patients without phone
     skipped = [p for p in patients if not p["WirelessPhone"].strip()]
@@ -181,136 +189,246 @@ def filter_patients(config: dict, procedures: list) -> list:
     return patients
 
 
-# ─── Step 3: Script Generation ───
+# ─── Step 3: Determine procedure category ───
 
-def generate_voice_script(config: dict, patient: dict) -> str:
-    """Generate a personalized ~30-second post-op care script using Claude API."""
-    import anthropic
-
-    client = anthropic.Anthropic(api_key=config["anthropic_api_key"])
-
-    proc_list = ", ".join(p["ProcDescription"] for p in patient["procedures"])
-
-    # Determine procedure category for care instructions
+def get_procedure_category(config: dict, patient: dict) -> str:
+    """Determine the primary procedure category for a patient's procedures."""
     proc_codes = [p["ProcCode"] for p in patient["procedures"]]
     categories = config.get("procedure_codes", DEFAULT_PROCEDURE_CODES)
-    proc_types = []
-    for category, codes in categories.items():
+
+    # Priority order: surgeries > implants > root_canals > extractions
+    for category in ["surgeries", "implants", "root_canals", "extractions"]:
+        codes = categories.get(category, [])
         if any(c in codes for c in proc_codes):
-            proc_types.append(category)
+            return category
 
-    system_prompt = """You are Dr. Ben Young, a dentist at Huntington Beach Dental Center.
-You are recording a personalized post-op check-in voicemail for a patient.
-Keep the message warm, caring, and concise (about 30 seconds when spoken, roughly 75-90 words).
-Include:
-1. A greeting using the patient's first name
-2. A brief mention that you're checking in after their procedure
-3. One or two specific care instructions relevant to their procedure type
-4. An invitation to call the office if they have any concerns
-5. A warm sign-off
-
-Do NOT include any stage directions, brackets, or formatting — output ONLY the spoken words.
-Sound natural, not robotic. Use contractions and casual phrasing."""
-
-    user_prompt = f"""Generate a post-op voicemail script for:
-- Patient: {patient['FName']}
-- Procedure(s): {proc_list}
-- Procedure type(s): {', '.join(proc_types)}
-"""
-
-    message = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=300,
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_prompt}],
-    )
-
-    script = message.content[0].text.strip()
-    logger.info(f"Generated script for {patient['FName']} {patient['LName']} ({len(script)} chars)")
-    return script
+    return "extractions"  # fallback
 
 
-# ─── Step 4: Audio Generation ───
+# ─── Step 4: Audio Generation (splice approach) ───
+#
+# ElevenLabs generates ONLY a short greeting: "Hi [name]"
+# This is spliced with a pre-recorded MP3 for the procedure category.
+#
+# Pre-recorded files go in: voice_drops/recordings/
+#   extractions.mp3
+#   implants.mp3
+#   root_canals.mp3
+#   surgeries.mp3
 
-def generate_audio(config: dict, script: str, patient: dict) -> str:
-    """Convert script to audio using ElevenLabs API. Returns the file path."""
+def generate_greeting_audio(config: dict, patient: dict) -> str:
+    """Use ElevenLabs to generate just the personalized greeting."""
     if not config.get("elevenlabs_api_key"):
         logger.warning("ElevenLabs API key not configured — skipping audio generation")
         return ""
 
-    from elevenlabs import ElevenLabs
+    from elevenlabs import ElevenLabs, VoiceSettings
 
     client = ElevenLabs(api_key=config["elevenlabs_api_key"])
 
     audio_dir = Path(__file__).parent / config.get("audio_output_dir", "voice_drops")
     audio_dir.mkdir(exist_ok=True)
 
-    filename = f"{patient['PatNum']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp3"
-    filepath = audio_dir / filename
+    # Short greeting only — just the patient's name
+    first_name = patient["FName"].strip().title()
+    greeting_text = f"Hi {first_name}, it's Dr. Young."
+
+    greeting_path = audio_dir / f"{patient['PatNum']}_greeting_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp3"
+
+    voice_settings = VoiceSettings(
+        stability=0.35,
+        similarity_boost=0.80,
+        style=0.3,
+        use_speaker_boost=True,
+    )
 
     audio_generator = client.text_to_speech.convert(
-        text=script,
+        text=greeting_text,
         voice_id=config["elevenlabs_voice_id"],
         model_id=config.get("elevenlabs_model_id", "eleven_multilingual_v2"),
         output_format="mp3_44100_128",
+        voice_settings=voice_settings,
     )
 
-    # ElevenLabs returns a generator — write chunks to file
-    with open(filepath, "wb") as f:
+    with open(greeting_path, "wb") as f:
         for chunk in audio_generator:
             f.write(chunk)
 
-    file_size = filepath.stat().st_size
-    logger.info(f"Audio generated: {filepath} ({file_size:,} bytes)")
-    return str(filepath)
+    logger.info(f"Greeting audio generated: {greeting_path} ({greeting_path.stat().st_size:,} bytes)")
+    return str(greeting_path)
+
+
+def get_recording_path(config: dict, category: str) -> str:
+    """Get the path to the pre-recorded audio for a procedure category.
+    Supports .mp3, .m4a, .wav formats."""
+    recordings_dir = Path(__file__).parent / config.get("audio_output_dir", "voice_drops") / "recordings"
+    for ext in [".m4a", ".mp3", ".wav"]:
+        recording_path = recordings_dir / f"{category}{ext}"
+        if recording_path.exists():
+            return str(recording_path)
+    logger.error(f"Pre-recorded audio not found for '{category}' in {recordings_dir}")
+    return ""
+
+
+def _trim_silence(audio, silence_thresh=-40, chunk_size=10):
+    """Trim leading and trailing silence from an AudioSegment.
+
+    Args:
+        audio: pydub AudioSegment
+        silence_thresh: dBFS threshold below which audio is considered silence
+        chunk_size: ms granularity for detection
+    Returns:
+        Trimmed AudioSegment
+    """
+    # Trim leading silence
+    start = 0
+    while start < len(audio) and audio[start:start + chunk_size].dBFS < silence_thresh:
+        start += chunk_size
+
+    # Trim trailing silence
+    end = len(audio)
+    while end > start and audio[end - chunk_size:end].dBFS < silence_thresh:
+        end -= chunk_size
+
+    return audio[start:end]
+
+
+def splice_audio(greeting_path: str, recording_path: str, output_path: str,
+                 crossfade_ms: int = 80) -> str:
+    """Splice the ElevenLabs greeting with a pre-recorded procedure message.
+
+    Trims silence from both clips and crossfades them for a seamless join.
+    """
+    from pydub import AudioSegment
+
+    greeting = AudioSegment.from_mp3(greeting_path)
+    # Auto-detect format from extension
+    rec_ext = Path(recording_path).suffix.lower().lstrip(".")
+    recording = AudioSegment.from_file(recording_path, format=rec_ext)
+
+    # Trim silence from end of greeting and start of recording
+    greeting = _trim_silence(greeting)
+    recording = _trim_silence(recording)
+
+    # Normalize volume levels so they match
+    greeting_loudness = greeting.dBFS
+    recording_loudness = recording.dBFS
+    if abs(greeting_loudness - recording_loudness) > 2:
+        # Match recording volume to greeting
+        recording = recording.apply_gain(greeting_loudness - recording_loudness)
+
+    # Natural pause between greeting and message (like a breath between sentences)
+    pause = AudioSegment.silent(duration=350)
+    greeting_with_pause = greeting + pause
+
+    # Crossfade the tail of greeting+pause into the start of recording
+    combined = greeting_with_pause.append(recording, crossfade=crossfade_ms)
+
+    combined.export(output_path, format="mp3", bitrate="128k")
+
+    file_size = Path(output_path).stat().st_size
+    duration_sec = len(combined) / 1000.0
+    logger.info(f"Spliced audio: {output_path} ({file_size:,} bytes, {duration_sec:.1f}s)")
+    return output_path
+
+
+def generate_audio(config: dict, patient: dict) -> str:
+    """Generate the complete voice drop audio by splicing greeting + pre-recorded message."""
+    category = get_procedure_category(config, patient)
+    logger.info(f"Procedure category: {category}")
+
+    # Get pre-recorded message for this procedure type
+    recording_path = get_recording_path(config, category)
+    if not recording_path:
+        return ""
+
+    # Generate personalized greeting via ElevenLabs
+    greeting_path = generate_greeting_audio(config, patient)
+    if not greeting_path:
+        return ""
+
+    # Splice them together
+    audio_dir = Path(__file__).parent / config.get("audio_output_dir", "voice_drops")
+    output_path = audio_dir / f"{patient['PatNum']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp3"
+
+    try:
+        result = splice_audio(greeting_path, recording_path, str(output_path))
+        # Clean up the temporary greeting file
+        try:
+            os.remove(greeting_path)
+        except OSError:
+            pass
+        return result
+    except Exception as e:
+        logger.error(f"Error splicing audio: {e}", exc_info=True)
+        return ""
 
 
 # ─── Step 5: Voicemail Delivery ───
 
-def send_ringless_voicemail(config: dict, phone: str, audio_path: str) -> dict:
-    """Send audio via Drop Cowboy API for ringless voicemail delivery."""
-    if not config.get("drop_cowboy_api_key"):
-        logger.warning("Drop Cowboy API key not configured — skipping delivery")
-        return {"status": "skipped", "reason": "no_api_key"}
+def send_ringless_voicemail(config: dict, phone: str, audio_path: str, patient: dict) -> dict:
+    """Send audio via Drop Cowboy v1 API for ringless voicemail delivery.
 
-    api_url = "https://app.dropcowboy.com/api/rvm/send"
-    headers = {
-        "Authorization": f"Bearer {config['drop_cowboy_api_key']}",
-    }
+    The spliced audio file is served via the MCP server's /audio/ endpoint.
+    Drop Cowboy fetches it from the public URL using audio_url parameter.
+    """
+    if not config.get("drop_cowboy_team_id") or not config.get("drop_cowboy_secret"):
+        logger.warning("Drop Cowboy credentials not configured — skipping delivery")
+        return {"status": "skipped", "reason": "no_credentials"}
 
-    # Clean phone number — digits only, ensure 10 or 11 digits
+    # Build public URL for the audio file served by MCP server
+    audio_filename = os.path.basename(audio_path)
+    mcp_base = config["mcp_endpoint"].replace("/mcp", "")
+    audio_url = f"{mcp_base}/audio/{audio_filename}?token={config['mcp_bearer_token']}"
+
+    # Clean phone number to E.164 format
     clean_phone = "".join(c for c in phone if c.isdigit())
     if len(clean_phone) == 10:
         clean_phone = "1" + clean_phone
+    clean_phone = f"+{clean_phone}"
 
-    with open(audio_path, "rb") as audio_file:
-        files = {"audio_file": (os.path.basename(audio_path), audio_file, "audio/mpeg")}
-        data = {
-            "phone_number": clean_phone,
-        }
-        resp = requests.post(api_url, headers=headers, data=data, files=files, timeout=60)
+    api_url = "https://api.dropcowboy.com/v1/rvm"
+    headers = {
+        "x-team-id": config["drop_cowboy_team_id"],
+        "x-secret": config["drop_cowboy_secret"],
+        "Content-Type": "application/json",
+    }
+    # Get patient zip for TCPA time-window compliance
+    patient_zip = patient.get("Zip", "").strip() or config.get("default_postal_code", "92648")
 
+    payload = {
+        "team_id": config["drop_cowboy_team_id"],
+        "secret": config["drop_cowboy_secret"],
+        "phone_number": clean_phone,
+        "audio_url": audio_url,
+        "foreign_id": f"voicedrop-{patient['PatNum']}-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+        "postal_code": patient_zip,
+        "forwarding_number": config.get("office_phone", "+17148425035"),
+    }
+
+    resp = requests.post(api_url, headers=headers, json=payload, timeout=30)
     resp.raise_for_status()
     result = resp.json()
-    logger.info(f"Voicemail sent to {clean_phone}: {result}")
+    logger.info(f"Voicemail queued for {clean_phone}: {result}")
     return result
 
 
 # ─── Step 6: Logging to Open Dental ───
 
-def create_commlog_entry(config: dict, patient: dict, script: str,
+def create_commlog_entry(config: dict, patient: dict, category: str,
                          delivery_result: dict) -> dict:
     """Create a commlog entry in Open Dental recording the voice drop."""
     proc_descriptions = ", ".join(p["ProcDescription"] for p in patient["procedures"])
     delivery_status = delivery_result.get("status", "unknown")
 
+    first_name = patient["FName"].strip().title()
     note = (
         f"[POST-OP VOICE DROP]\n"
+        f"Greeting: Hi {first_name}, it's Dr. Young.\n"
+        f"Recording: {category}.mp3\n"
         f"Procedures: {proc_descriptions}\n"
         f"Phone: {patient['WirelessPhone']}\n"
-        f"Delivery status: {delivery_status}\n"
-        f"---\n"
-        f"Script:\n{script}"
+        f"Delivery status: {delivery_status}"
     )
 
     result = call_mcp_tool(config, "create_commlog", {
@@ -366,27 +484,26 @@ def process_voice_drops(config: dict = None):
         pat_name = f"{patient['FName']} {patient['LName']}"
         logger.info(f"\n--- Processing: {pat_name} (PatNum: {patient['PatNum']}) ---")
         try:
-            # Generate script
-            script = generate_voice_script(config, patient)
-            logger.info(f"Script:\n{script}\n")
+            category = get_procedure_category(config, patient)
+            logger.info(f"Procedure category: {category}")
 
             if config.get("dry_run"):
-                logger.info("DRY RUN — skipping audio generation and delivery")
+                logger.info(f"DRY RUN — would generate greeting for {patient['FName'].strip().title()} + {category}.mp3")
                 delivery_result = {"status": "dry_run"}
             else:
-                # Generate audio
-                audio_path = generate_audio(config, script, patient)
+                # Generate spliced audio (ElevenLabs greeting + pre-recorded message)
+                audio_path = generate_audio(config, patient)
 
                 if audio_path:
                     # Send voicemail
                     delivery_result = send_ringless_voicemail(
-                        config, patient["WirelessPhone"], audio_path
+                        config, patient["WirelessPhone"], audio_path, patient
                     )
                 else:
                     delivery_result = {"status": "skipped", "reason": "no_audio"}
 
             # Log to Open Dental
-            create_commlog_entry(config, patient, script, delivery_result)
+            create_commlog_entry(config, patient, category, delivery_result)
 
             results["patients_processed"] += 1
             if delivery_result.get("status") not in ("skipped", "dry_run"):

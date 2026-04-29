@@ -1,0 +1,13 @@
+{
+    "service_name": "Knowledge MCP",
+    "memory_dir": "C:/Users/Administrator/.claude/projects/C--Users-Administrator-Desktop-Cursor-OpenDentalMCP/memory",
+    "skill_roots": [
+        "C:/Users/Administrator/AppData/Roaming/Claude/local-agent-mode-sessions/skills-plugin",
+        "C:/Users/Administrator/.claude/scheduled-tasks",
+        "C:/Users/Administrator/.claude/skills"
+    ],
+    "mcp": {
+        "http_port": 8446,
+        "http_host": "0.0.0.0"
+    }
+}

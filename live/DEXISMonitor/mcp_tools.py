@@ -28,15 +28,17 @@ def validate_query(query: str) -> Tuple[bool, Optional[str]]:
         Tuple of (is_valid, error_message)
     """
     query_upper = query.strip().upper()
-    
-    # Block dangerous keywords
+
+    # Block dangerous keywords (word-boundary match to avoid false positives
+    # like CreatedDate matching CREATE, or UpdatedBy matching UPDATE)
     dangerous_keywords = [
         'DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'CREATE',
         'TRUNCATE', 'EXEC', 'EXECUTE', 'SP_', 'XP_'
     ]
-    
+
     for keyword in dangerous_keywords:
-        if keyword in query_upper:
+        # Use word boundary regex so column names like "CreatedDate" don't match "CREATE"
+        if re.search(r'\b' + keyword + r'\b', query_upper):
             return False, f"Query contains forbidden keyword: {keyword}. Only SELECT queries are allowed."
     
     # Must start with SELECT

@@ -665,6 +665,14 @@ class OpenDentalMCPTools:
                         "ProcDescript": {
                             "type": "string",
                             "description": "Procedure description"
+                        },
+                        "Assistant": {
+                            "type": "string",
+                            "description": "Optional: Assistant employee ID (EmployeeNum). Added in OD 25.4."
+                        },
+                        "IsMirrored": {
+                            "type": "boolean",
+                            "description": "Optional: True if this is a mirrored appointment (other-op). Added in OD 25.4."
                         }
                     },
                     "required": ["PatNum", "AptDateTime", "ProvNum", "Op"]
@@ -699,6 +707,14 @@ class OpenDentalMCPTools:
                         "ProcDescript": {
                             "type": "string",
                             "description": "Procedure description"
+                        },
+                        "Assistant": {
+                            "type": "string",
+                            "description": "Optional: Assistant employee ID (EmployeeNum). Added in OD 25.4."
+                        },
+                        "IsMirrored": {
+                            "type": "boolean",
+                            "description": "Optional: True if this is a mirrored appointment (other-op). Added in OD 25.4."
                         }
                     },
                     "required": ["appointment_id"]
@@ -766,7 +782,7 @@ class OpenDentalMCPTools:
             },
             {
                 "name": "update_procedure_log",
-                "description": "Update an existing procedure log (procedure code). WARNING: This will modify procedure data in Open Dental. Cannot update completed procedures (ProcStatus = C). Treatment areas must match when changing codes.",
+                "description": "Update an existing procedure log. WARNING: This will modify procedure data in Open Dental. Cannot update completed procedures (ProcStatus = C). Treatment areas must match when changing codes.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -781,6 +797,30 @@ class OpenDentalMCPTools:
                         "CodeNum": {
                             "type": "string",
                             "description": "Procedure code internal ID (CodeNum) - alternative to procCode"
+                        },
+                        "priority": {
+                            "type": "string",
+                            "description": "Optional: Treatment priority definition ID (DefNum). Pass 0 to clear priority (OD 25.4+)."
+                        },
+                        "DiagnosticCode": {
+                            "type": "string",
+                            "description": "Optional: Primary diagnostic code (e.g., ICD-10). Added in OD 25.4."
+                        },
+                        "DiagnosticCode2": {
+                            "type": "string",
+                            "description": "Optional: Second diagnostic code. Added in OD 25.4."
+                        },
+                        "DiagnosticCode3": {
+                            "type": "string",
+                            "description": "Optional: Third diagnostic code. Added in OD 25.4."
+                        },
+                        "DiagnosticCode4": {
+                            "type": "string",
+                            "description": "Optional: Fourth diagnostic code. Added in OD 25.4."
+                        },
+                        "IsPrincDiag": {
+                            "type": "boolean",
+                            "description": "Optional: True if DiagnosticCode is the principal diagnosis. Added in OD 25.4."
                         }
                     },
                     "required": ["procedure_id"]
@@ -839,6 +879,26 @@ class OpenDentalMCPTools:
                         "ProcFee": {
                             "type": "string",
                             "description": "Optional: Procedure fee override. If not set, uses the fee schedule amount."
+                        },
+                        "DiagnosticCode": {
+                            "type": "string",
+                            "description": "Optional: Primary diagnostic code (e.g., ICD-10). Added in OD 25.4."
+                        },
+                        "DiagnosticCode2": {
+                            "type": "string",
+                            "description": "Optional: Second diagnostic code. Added in OD 25.4."
+                        },
+                        "DiagnosticCode3": {
+                            "type": "string",
+                            "description": "Optional: Third diagnostic code. Added in OD 25.4."
+                        },
+                        "DiagnosticCode4": {
+                            "type": "string",
+                            "description": "Optional: Fourth diagnostic code. Added in OD 25.4."
+                        },
+                        "IsPrincDiag": {
+                            "type": "boolean",
+                            "description": "Optional: True if DiagnosticCode is the principal diagnosis. Added in OD 25.4."
                         }
                     },
                     "required": ["PatNum", "procCode"]
@@ -2287,6 +2347,14 @@ class OpenDentalMCPTools:
                         "payPlanNum": {
                             "type": "string",
                             "description": "Optional: Payment plan ID (PayPlanNum) for prepayment"
+                        },
+                        "MerchantFee": {
+                            "type": "string",
+                            "description": "Optional: Merchant processing fee (e.g., credit card surcharge). Added in OD 25.4."
+                        },
+                        "isUnallocatedPrepayment": {
+                            "type": "boolean",
+                            "description": "Optional: Create as an unallocated prepayment. Added in OD 25.4."
                         }
                     },
                     "required": ["PayAmt", "PatNum"]
@@ -2991,6 +3059,260 @@ class OpenDentalMCPTools:
                     },
                     "required": ["PatNum", "Note"]
                 }
+            },
+            {
+                "name": "get_task_lists",
+                "description": "List task lists (the 'buckets' tasks live in, e.g. per-employee lists like 'Ben', 'Nicole'). Returns TaskListNum, Descript, Parent, TaskListStatus.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "name_contains": {
+                            "type": "string",
+                            "description": "Optional case-insensitive filter on Descript (client-side substring match)"
+                        },
+                        "include_done": {
+                            "type": "boolean",
+                            "description": "Include task lists with TaskListStatus='Done' (default false)"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "create_task",
+                "description": "Create a new task in a task list. WARNING: writes to Open Dental. task_list_id and description are required. NOTE: Open Dental's REST API does not support setting due dates (DateTask) or DateTimeFinished via API in this version.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "task_list_id": {
+                            "type": "integer",
+                            "description": "TaskListNum the task belongs to (required, must reference an existing task list - call get_task_lists to find IDs)"
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": "Task description / what to do (required, maps to Descript)"
+                        },
+                        "assigned_user_id": {
+                            "type": "integer",
+                            "description": "Optional: UserNum to assign the task to. Note: when the task list is a user-bound list (e.g. 'Ben'), Open Dental may auto-set this to the list owner."
+                        },
+                        "patient_id": {
+                            "type": "integer",
+                            "description": "Optional: PatNum to link the task to (sets ObjectType='Patient' and KeyNum=patient_id). Mutually exclusive with appointment_id."
+                        },
+                        "appointment_id": {
+                            "type": "integer",
+                            "description": "Optional: AptNum to link the task to (sets ObjectType='Appointment' and KeyNum=appointment_id). Mutually exclusive with patient_id."
+                        },
+                        "priority_def_id": {
+                            "type": "integer",
+                            "description": "Optional: PriorityDefNum (DefNum where Category=33 'TaskPriorities'). At this practice: 333=Urgent, 263=Normal (default), 290=Reminder, 334=Low."
+                        },
+                        "status": {
+                            "type": "string",
+                            "description": "Optional: TaskStatus ('New', 'Viewed', 'Done'). Defaults to 'New'.",
+                            "enum": ["New", "Viewed", "Done"]
+                        }
+                    },
+                    "required": ["task_list_id", "description"]
+                }
+            },
+            {
+                "name": "get_task",
+                "description": "Get a single task by TaskNum. Includes a notes summary (count). Use get_task_notes for full notes.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "task_id": {
+                            "type": "integer",
+                            "description": "TaskNum of the task"
+                        },
+                        "include_notes": {
+                            "type": "boolean",
+                            "description": "If true, also fetch and inline the task's notes (default false)"
+                        }
+                    },
+                    "required": ["task_id"]
+                }
+            },
+            {
+                "name": "get_tasks",
+                "description": "List tasks with filters. All filters are optional; results paginated. Useful for monitoring employee work queues.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "task_list_id": {
+                            "type": "integer",
+                            "description": "Optional: filter to one TaskListNum (use get_task_lists to find IDs)"
+                        },
+                        "assigned_user_id": {
+                            "type": "integer",
+                            "description": "Optional: filter to tasks assigned to this UserNum"
+                        },
+                        "status": {
+                            "type": "string",
+                            "description": "Optional: filter by TaskStatus",
+                            "enum": ["New", "Viewed", "Done"]
+                        },
+                        "date_from": {
+                            "type": "string",
+                            "description": "Optional: filter DateTimeEntry >= this date (YYYY-MM-DD)"
+                        },
+                        "date_to": {
+                            "type": "string",
+                            "description": "Optional: filter DateTimeEntry <= this date (YYYY-MM-DD)"
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Max records to return per page (default 100, max 1000)"
+                        },
+                        "offset": {
+                            "type": "integer",
+                            "description": "Pagination offset (default 0)"
+                        },
+                        "fetch_all": {
+                            "type": "boolean",
+                            "description": "If true, page through all results until exhausted (default false)"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "update_task",
+                "description": "Update a task. Mutable via API: description, status, priority, patient/appointment link. When status='Done' is set and a direct DB connection is configured, DateTimeFinished is automatically stamped to NOW() (and cleared if the status moves back to New/Viewed). To move a task between lists or reassign to a different user, use reassign_task. To set a due date, use set_task_due_date. To permanently remove a task, use delete_task.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "task_id": {
+                            "type": "integer",
+                            "description": "TaskNum of the task to update (required)"
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": "Optional: new task description (Descript)"
+                        },
+                        "status": {
+                            "type": "string",
+                            "description": "Optional: new TaskStatus",
+                            "enum": ["New", "Viewed", "Done"]
+                        },
+                        "priority_def_id": {
+                            "type": "integer",
+                            "description": "Optional: new PriorityDefNum (Category=33). 333=Urgent, 263=Normal, 290=Reminder, 334=Low."
+                        },
+                        "patient_id": {
+                            "type": "integer",
+                            "description": "Optional: link to PatNum (sets ObjectType='Patient', KeyNum=patient_id)"
+                        },
+                        "appointment_id": {
+                            "type": "integer",
+                            "description": "Optional: link to AptNum (sets ObjectType='Appointment', KeyNum=appointment_id)"
+                        },
+                        "clear_link": {
+                            "type": "boolean",
+                            "description": "Optional: if true, clears any patient/appointment link (sets ObjectType='None', KeyNum=0)"
+                        }
+                    },
+                    "required": ["task_id"]
+                }
+            },
+            {
+                "name": "get_task_notes",
+                "description": "List notes (comments) attached to a task, ordered by DateTimeNote ascending.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "task_id": {
+                            "type": "integer",
+                            "description": "TaskNum of the task"
+                        }
+                    },
+                    "required": ["task_id"]
+                }
+            },
+            {
+                "name": "create_task_note",
+                "description": "Append a note (comment / status update) to an existing task. WARNING: writes to Open Dental.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "task_id": {
+                            "type": "integer",
+                            "description": "TaskNum of the task to comment on (required)"
+                        },
+                        "user_id": {
+                            "type": "integer",
+                            "description": "UserNum of the author (required)"
+                        },
+                        "note": {
+                            "type": "string",
+                            "description": "Note body (required)"
+                        }
+                    },
+                    "required": ["task_id", "user_id", "note"]
+                }
+            },
+            {
+                "name": "set_task_due_date",
+                "description": "Set or clear a task's due date. Uses direct DB write because the Open Dental REST API does not expose DateTask. Requires direct database connection.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "task_id": {
+                            "type": "integer",
+                            "description": "TaskNum of the task (required)"
+                        },
+                        "date": {
+                            "type": "string",
+                            "description": "Due date as YYYY-MM-DD. Pass empty string or omit to clear the due date."
+                        },
+                        "date_type": {
+                            "type": "string",
+                            "description": "Granularity of the due date. Default 'Day' when a date is set; forced to 'None' when clearing.",
+                            "enum": ["None", "Day", "Week", "Month", "Year"]
+                        }
+                    },
+                    "required": ["task_id"]
+                }
+            },
+            {
+                "name": "reassign_task",
+                "description": "Move a task to a different task list and/or change its assigned user. Uses direct DB write because the Open Dental REST API silently ignores these fields on PUT. Requires direct database connection. Note: other Open Dental workstations may need to refresh to see the change (no signalod entry written).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "task_id": {
+                            "type": "integer",
+                            "description": "TaskNum of the task to reassign (required)"
+                        },
+                        "task_list_id": {
+                            "type": "integer",
+                            "description": "Optional: new TaskListNum. Must reference an existing task list. Provide this and/or assigned_user_id."
+                        },
+                        "assigned_user_id": {
+                            "type": "integer",
+                            "description": "Optional: new UserNum (employee assignee). 0 to clear. Provide this and/or task_list_id."
+                        }
+                    },
+                    "required": ["task_id"]
+                }
+            },
+            {
+                "name": "delete_task",
+                "description": "Permanently delete a task. Uses direct DB DELETE because the Open Dental REST API does not allow it. Cascades to tasknote, tasksubscription, taskunread, taskancestor, and taskattachment rows. taskhist (audit log) is preserved. IRREVERSIBLE. Requires direct database connection.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "task_id": {
+                            "type": "integer",
+                            "description": "TaskNum of the task to delete (required)"
+                        },
+                        "delete_notes": {
+                            "type": "boolean",
+                            "description": "If true (default), also deletes tasknote rows. If false and notes exist, returns an error to prevent accidental orphaning."
+                        }
+                    },
+                    "required": ["task_id"]
+                }
             }
         ]
 
@@ -3234,6 +3556,44 @@ class OpenDentalMCPTools:
             # ── Commlog tools ──
             elif tool_name == "create_commlog":
                 return self._create_commlog(arguments)
+            # ── Task tools ──
+            elif tool_name == "get_task_lists":
+                return self._get_task_lists(
+                    name_contains=arguments.get("name_contains"),
+                    include_done=arguments.get("include_done", False),
+                )
+            elif tool_name == "create_task":
+                return self._create_task(arguments)
+            elif tool_name == "get_task":
+                return self._get_task(
+                    task_id=arguments.get("task_id"),
+                    include_notes=arguments.get("include_notes", False),
+                )
+            elif tool_name == "get_tasks":
+                return self._get_tasks(arguments)
+            elif tool_name == "update_task":
+                return self._update_task(arguments)
+            elif tool_name == "get_task_notes":
+                return self._get_task_notes(arguments.get("task_id"))
+            elif tool_name == "create_task_note":
+                return self._create_task_note(arguments)
+            elif tool_name == "set_task_due_date":
+                return self._set_task_due_date(
+                    task_id=arguments.get("task_id"),
+                    date=arguments.get("date"),
+                    date_type=arguments.get("date_type"),
+                )
+            elif tool_name == "reassign_task":
+                return self._reassign_task(
+                    task_id=arguments.get("task_id"),
+                    task_list_id=arguments.get("task_list_id"),
+                    assigned_user_id=arguments.get("assigned_user_id"),
+                )
+            elif tool_name == "delete_task":
+                return self._delete_task(
+                    task_id=arguments.get("task_id"),
+                    delete_notes=arguments.get("delete_notes", True),
+                )
             else:
                 raise ValueError(f"Unknown tool: {tool_name}")
         except Exception as e:
@@ -3393,6 +3753,24 @@ class OpenDentalMCPTools:
                     "endpoint": "/commlogs",
                     "description": "Communication log records",
                     "methods": ["GET", "POST", "PUT"]
+                },
+                {
+                    "name": "tasks",
+                    "endpoint": "/tasks",
+                    "description": "Task records (employee work queue items). DELETE not supported by API; close via TaskStatus='Done'.",
+                    "methods": ["GET", "POST", "PUT"]
+                },
+                {
+                    "name": "tasklists",
+                    "endpoint": "/tasklists",
+                    "description": "Task list buckets (typically per-employee or per-team)",
+                    "methods": ["GET"]
+                },
+                {
+                    "name": "tasknotes",
+                    "endpoint": "/tasknotes",
+                    "description": "Notes / comments threaded under a task. DELETE not supported by API.",
+                    "methods": ["GET", "POST"]
                 }
             ],
             "api_url": self.api_url
@@ -4097,25 +4475,34 @@ class OpenDentalMCPTools:
             }
     
     def _update_procedure_log(self, procedure_id: str, procedure_data: Dict) -> Dict:
-        """Update an existing procedure log (procedure code)"""
+        """Update an existing procedure log."""
         try:
             # Remove procedure_id from data (it's in the URL)
             procedure_data = {k: v for k, v in procedure_data.items() if k != "procedure_id"}
-            
-            # Ensure at least one of procCode or CodeNum is provided
-            if not procedure_data.get("procCode") and not procedure_data.get("CodeNum"):
+
+            # Whitelist of fields the OD API accepts on PUT /procedurelogs/{id}.
+            # priority=0 is allowed (OD 25.4+) and clears the priority.
+            # Keep falsy-but-valid values (0, False); drop None and empty strings.
+            put_fields = [
+                "procCode", "CodeNum", "priority",
+                "DiagnosticCode", "DiagnosticCode2", "DiagnosticCode3",
+                "DiagnosticCode4", "IsPrincDiag",
+            ]
+            update_data = {
+                k: v for k, v in procedure_data.items()
+                if k in put_fields and v is not None and v != ""
+            }
+
+            # If both procCode and CodeNum are provided, prefer procCode.
+            if "procCode" in update_data and "CodeNum" in update_data:
+                update_data.pop("CodeNum")
+
+            if not update_data:
                 return {
                     "success": False,
-                    "error": "Either procCode or CodeNum must be provided to update the procedure code"
+                    "error": "At least one updatable field must be provided (procCode, CodeNum, priority, DiagnosticCode[1-4], IsPrincDiag)"
                 }
-            
-            # Only include procCode or CodeNum (not both) - API prefers procCode
-            update_data = {}
-            if procedure_data.get("procCode"):
-                update_data["procCode"] = procedure_data["procCode"]
-            elif procedure_data.get("CodeNum"):
-                update_data["CodeNum"] = procedure_data["CodeNum"]
-            
+
             result = self._make_request("PUT", f"/procedurelogs/{procedure_id}", data=update_data)
             return {
                 "success": True,
@@ -4161,7 +4548,10 @@ class OpenDentalMCPTools:
             api_fields = [
                 "PatNum", "procCode", "ToothNum", "Surf", "ProcDate",
                 "ProcStatus", "ProvNum", "ClinicNum", "Dx", "priority",
-                "ToothRange", "ProcFee", "CodeNum"
+                "ToothRange", "ProcFee", "CodeNum",
+                # Added in OD 25.4
+                "DiagnosticCode", "DiagnosticCode2", "DiagnosticCode3",
+                "DiagnosticCode4", "IsPrincDiag",
             ]
             payload = {k: v for k, v in procedure_data.items() if k in api_fields and v is not None and v != ""}
 
@@ -6874,5 +7264,531 @@ LIMIT 1000
 
         except Exception as e:
             logger.error(f"Error in disable_popups: {e}")
+            return {"success": False, "error": str(e)}
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Task tools
+    # ──────────────────────────────────────────────────────────────────────────
+
+    _VALID_TASK_STATUS = ("New", "Viewed", "Done")
+
+    def _get_task_lists(self, name_contains: Optional[str] = None,
+                        include_done: bool = False) -> Dict:
+        try:
+            lists = self._make_request("GET", "/tasklists")
+            if not isinstance(lists, list):
+                lists = [lists] if lists else []
+
+            if not include_done:
+                lists = [tl for tl in lists if tl.get("TaskListStatus") != "Done"]
+
+            if name_contains:
+                needle = name_contains.lower()
+                lists = [tl for tl in lists if needle in str(tl.get("Descript", "")).lower()]
+
+            return {
+                "success": True,
+                "count": len(lists),
+                "task_lists": lists,
+            }
+        except Exception as e:
+            logger.error(f"Error in get_task_lists: {e}")
+            return {"success": False, "error": str(e)}
+
+    def _create_task(self, args: Dict) -> Dict:
+        try:
+            task_list_id = args.get("task_list_id")
+            description = args.get("description")
+
+            if not task_list_id or int(task_list_id) <= 0:
+                return {"success": False, "error": "task_list_id is required (must reference an existing task list)"}
+            if not description or not str(description).strip():
+                return {"success": False, "error": "description is required"}
+
+            patient_id = args.get("patient_id")
+            appointment_id = args.get("appointment_id")
+            if patient_id and appointment_id:
+                return {"success": False, "error": "Provide patient_id OR appointment_id, not both"}
+
+            status = args.get("status")
+            if status and status not in self._VALID_TASK_STATUS:
+                return {"success": False, "error": f"Invalid status '{status}'. Allowed: {list(self._VALID_TASK_STATUS)}"}
+
+            payload: Dict[str, Any] = {
+                "TaskListNum": int(task_list_id),
+                "Descript": str(description).strip(),
+            }
+            if args.get("assigned_user_id") is not None:
+                payload["UserNum"] = int(args["assigned_user_id"])
+            if args.get("priority_def_id") is not None:
+                payload["PriorityDefNum"] = int(args["priority_def_id"])
+            if status:
+                payload["TaskStatus"] = status
+            if patient_id:
+                payload["ObjectType"] = "Patient"
+                payload["KeyNum"] = int(patient_id)
+            elif appointment_id:
+                payload["ObjectType"] = "Appointment"
+                payload["KeyNum"] = int(appointment_id)
+
+            result = self._make_request("POST", "/tasks", data=payload)
+            return {
+                "success": True,
+                "message": f"Task created in TaskList {payload['TaskListNum']}",
+                "task": result,
+            }
+        except Exception as e:
+            logger.error(f"Error in create_task: {e}")
+            return {"success": False, "error": str(e)}
+
+    def _get_task(self, task_id: Any, include_notes: bool = False) -> Dict:
+        try:
+            if not task_id:
+                return {"success": False, "error": "task_id is required"}
+            task = self._make_request("GET", f"/tasks/{int(task_id)}")
+            out: Dict[str, Any] = {"success": True, "task": task}
+            if include_notes:
+                notes_resp = self._get_task_notes(task_id)
+                if notes_resp.get("success"):
+                    out["notes"] = notes_resp.get("notes", [])
+                    out["note_count"] = notes_resp.get("count", 0)
+                else:
+                    out["notes_error"] = notes_resp.get("error")
+            return out
+        except Exception as e:
+            logger.error(f"Error in get_task: {e}")
+            return {"success": False, "error": str(e)}
+
+    def _get_tasks(self, args: Dict) -> Dict:
+        try:
+            status = args.get("status")
+            if status and status not in self._VALID_TASK_STATUS:
+                return {"success": False, "error": f"Invalid status '{status}'. Allowed: {list(self._VALID_TASK_STATUS)}"}
+
+            base_params: Dict[str, Any] = {}
+            if args.get("task_list_id") is not None:
+                base_params["TaskListNum"] = int(args["task_list_id"])
+            if args.get("assigned_user_id") is not None:
+                base_params["UserNum"] = int(args["assigned_user_id"])
+            if status:
+                base_params["TaskStatus"] = status
+            if args.get("date_from"):
+                base_params["dateStart"] = args["date_from"]
+            if args.get("date_to"):
+                base_params["dateEnd"] = args["date_to"]
+
+            limit = int(args.get("limit") or 100)
+            if limit < 1:
+                limit = 1
+            if limit > 1000:
+                limit = 1000
+            offset = int(args.get("offset") or 0)
+            fetch_all = bool(args.get("fetch_all", False))
+
+            all_tasks: List[Dict] = []
+            page_size = limit
+            current_offset = offset
+
+            while True:
+                page_params = dict(base_params)
+                page_params["Limit"] = page_size
+                page_params["Offset"] = current_offset
+                page = self._make_request("GET", "/tasks", params=page_params)
+                if not isinstance(page, list):
+                    page = [page] if page else []
+                all_tasks.extend(page)
+                if not fetch_all:
+                    break
+                if len(page) < page_size:
+                    break
+                current_offset += page_size
+
+            return {
+                "success": True,
+                "count": len(all_tasks),
+                "filters": base_params,
+                "limit": limit,
+                "offset": offset,
+                "fetch_all": fetch_all,
+                "tasks": all_tasks,
+            }
+        except Exception as e:
+            logger.error(f"Error in get_tasks: {e}")
+            return {"success": False, "error": str(e)}
+
+    def _update_task(self, args: Dict) -> Dict:
+        try:
+            task_id = args.get("task_id")
+            if not task_id:
+                return {"success": False, "error": "task_id is required"}
+
+            patient_id = args.get("patient_id")
+            appointment_id = args.get("appointment_id")
+            clear_link = bool(args.get("clear_link", False))
+            link_inputs = sum(1 for v in (patient_id, appointment_id, clear_link or None) if v)
+            if link_inputs > 1:
+                return {"success": False, "error": "Provide at most one of patient_id, appointment_id, clear_link=true"}
+
+            status = args.get("status")
+            if status and status not in self._VALID_TASK_STATUS:
+                return {"success": False, "error": f"Invalid status '{status}'. Allowed: {list(self._VALID_TASK_STATUS)}"}
+
+            payload: Dict[str, Any] = {}
+            if args.get("description") is not None:
+                payload["Descript"] = str(args["description"])
+            if status:
+                payload["TaskStatus"] = status
+            if args.get("priority_def_id") is not None:
+                payload["PriorityDefNum"] = int(args["priority_def_id"])
+            if patient_id:
+                payload["ObjectType"] = "Patient"
+                payload["KeyNum"] = int(patient_id)
+            elif appointment_id:
+                payload["ObjectType"] = "Appointment"
+                payload["KeyNum"] = int(appointment_id)
+            elif clear_link:
+                payload["ObjectType"] = "None"
+                payload["KeyNum"] = 0
+
+            if not payload:
+                return {"success": False, "error": "No mutable fields supplied"}
+
+            result = self._make_request("PUT", f"/tasks/{int(task_id)}", data=payload)
+
+            datetime_finished_synced = None
+            datetime_finished_warning = None
+            if status:
+                sync_resp = self._sync_task_datetime_finished(int(task_id), status)
+                if sync_resp.get("success"):
+                    datetime_finished_synced = sync_resp.get("value")
+                    if isinstance(result, dict) and datetime_finished_synced is not None:
+                        result["DateTimeFinished"] = datetime_finished_synced
+                else:
+                    datetime_finished_warning = sync_resp.get("error")
+
+            response: Dict[str, Any] = {
+                "success": True,
+                "message": f"Task {task_id} updated",
+                "fields_sent": list(payload.keys()),
+                "task": result,
+            }
+            if datetime_finished_synced is not None:
+                response["datetime_finished_synced_via_db"] = datetime_finished_synced
+            if datetime_finished_warning:
+                response["datetime_finished_warning"] = datetime_finished_warning
+            return response
+        except Exception as e:
+            logger.error(f"Error in update_task: {e}")
+            return {"success": False, "error": str(e)}
+
+    def _get_task_notes(self, task_id: Any) -> Dict:
+        try:
+            if not task_id:
+                return {"success": False, "error": "task_id is required"}
+            notes = self._make_request("GET", "/tasknotes", params={"TaskNum": int(task_id)})
+            if not isinstance(notes, list):
+                notes = [notes] if notes else []
+            notes.sort(key=lambda n: n.get("DateTimeNote", ""))
+            return {
+                "success": True,
+                "task_id": int(task_id),
+                "count": len(notes),
+                "notes": notes,
+            }
+        except Exception as e:
+            logger.error(f"Error in get_task_notes: {e}")
+            return {"success": False, "error": str(e)}
+
+    def _create_task_note(self, args: Dict) -> Dict:
+        try:
+            task_id = args.get("task_id")
+            user_id = args.get("user_id")
+            note = args.get("note")
+
+            if not task_id:
+                return {"success": False, "error": "task_id is required"}
+            if not user_id:
+                return {"success": False, "error": "user_id is required"}
+            if not note or not str(note).strip():
+                return {"success": False, "error": "note is required"}
+
+            payload = {
+                "TaskNum": int(task_id),
+                "UserNum": int(user_id),
+                "Note": str(note),
+            }
+            result = self._make_request("POST", "/tasknotes", data=payload)
+            return {
+                "success": True,
+                "message": f"Note added to task {task_id}",
+                "task_note": result,
+            }
+        except Exception as e:
+            logger.error(f"Error in create_task_note: {e}")
+            return {"success": False, "error": str(e)}
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Task tools (direct DB) — fix gaps the REST API doesn't expose
+    # ──────────────────────────────────────────────────────────────────────────
+
+    _DATE_TYPE_MAP = {"None": 0, "Day": 1, "Week": 2, "Month": 3, "Year": 4}
+    _TASK_STATUS_MAP = {"New": 0, "Viewed": 1, "Done": 2}
+
+    def _ph(self) -> str:
+        """Return the SQL parameter placeholder for the active DB driver."""
+        return "?" if self.db_type == "sqlserver" else "%s"
+
+    def _now_sql(self) -> str:
+        return "GETDATE()" if self.db_type == "sqlserver" else "NOW()"
+
+    def _task_exists(self, cursor, task_id: int) -> bool:
+        ph = self._ph()
+        cursor.execute(f"SELECT 1 FROM task WHERE TaskNum = {ph}", (task_id,))
+        return cursor.fetchone() is not None
+
+    def _sync_task_datetime_finished(self, task_id: int, status: str) -> Dict:
+        """When status='Done', stamp DateTimeFinished=NOW() in DB.
+        When status='New' or 'Viewed', clear DateTimeFinished.
+        Returns {'success': True, 'value': '<iso datetime or zero>'} or {'success': False, 'error': ...}.
+        """
+        conn = self._get_db_connection()
+        if not conn:
+            return {"success": False, "error": "Database not configured; DateTimeFinished was not synced."}
+        try:
+            cursor = conn.cursor()
+            ph = self._ph()
+            if status == "Done":
+                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                cursor.execute(
+                    f"UPDATE task SET DateTimeFinished = {ph}, SecDateTEdit = {self._now_sql()} WHERE TaskNum = {ph}",
+                    (now_str, task_id),
+                )
+                value = now_str
+            else:
+                cursor.execute(
+                    f"UPDATE task SET DateTimeFinished = '0001-01-01 00:00:00', SecDateTEdit = {self._now_sql()} WHERE TaskNum = {ph}",
+                    (task_id,),
+                )
+                value = "0001-01-01 00:00:00"
+            conn.commit()
+            return {"success": True, "value": value, "rows_affected": cursor.rowcount}
+        except Exception as e:
+            logger.error(f"Error syncing DateTimeFinished for task {task_id}: {e}")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            return {"success": False, "error": str(e)}
+        finally:
+            try:
+                cursor.close()
+                conn.close()
+            except Exception:
+                pass
+
+    def _set_task_due_date(self, task_id: Any, date: Optional[str] = None,
+                           date_type: Optional[str] = None) -> Dict:
+        try:
+            if not task_id:
+                return {"success": False, "error": "task_id is required"}
+
+            clearing = not date or not str(date).strip()
+
+            if clearing:
+                effective_date_type = "None"
+                effective_date = "0001-01-01"
+            else:
+                date_str = str(date).strip()
+                try:
+                    datetime.strptime(date_str, "%Y-%m-%d")
+                except ValueError:
+                    return {"success": False, "error": f"Invalid date '{date_str}'. Expected YYYY-MM-DD."}
+                effective_date_type = date_type or "Day"
+                effective_date = date_str
+
+            if effective_date_type not in self._DATE_TYPE_MAP:
+                return {
+                    "success": False,
+                    "error": f"Invalid date_type '{effective_date_type}'. Allowed: {list(self._DATE_TYPE_MAP)}",
+                }
+
+            conn = self._get_db_connection()
+            if not conn:
+                return {"success": False, "error": "Database connection not configured. Set OPENDENTAL_DB_* environment variables."}
+
+            try:
+                cursor = conn.cursor()
+                if not self._task_exists(cursor, int(task_id)):
+                    return {"success": False, "error": f"Task {task_id} not found"}
+
+                ph = self._ph()
+                cursor.execute(
+                    f"UPDATE task SET DateTask = {ph}, DateType = {ph}, SecDateTEdit = {self._now_sql()} WHERE TaskNum = {ph}",
+                    (effective_date, self._DATE_TYPE_MAP[effective_date_type], int(task_id)),
+                )
+                affected = cursor.rowcount
+                conn.commit()
+                return {
+                    "success": True,
+                    "message": ("Cleared due date" if clearing else f"Set due date to {effective_date} ({effective_date_type})"),
+                    "task_id": int(task_id),
+                    "DateTask": effective_date,
+                    "DateType": effective_date_type,
+                    "rows_affected": affected,
+                }
+            except Exception as inner:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                raise inner
+            finally:
+                try:
+                    cursor.close()
+                    conn.close()
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.error(f"Error in set_task_due_date: {e}")
+            return {"success": False, "error": str(e)}
+
+    def _reassign_task(self, task_id: Any, task_list_id: Optional[int] = None,
+                       assigned_user_id: Optional[int] = None) -> Dict:
+        try:
+            if not task_id:
+                return {"success": False, "error": "task_id is required"}
+            if task_list_id is None and assigned_user_id is None:
+                return {"success": False, "error": "Provide task_list_id and/or assigned_user_id"}
+
+            conn = self._get_db_connection()
+            if not conn:
+                return {"success": False, "error": "Database connection not configured. Set OPENDENTAL_DB_* environment variables."}
+
+            try:
+                cursor = conn.cursor()
+                ph = self._ph()
+
+                if not self._task_exists(cursor, int(task_id)):
+                    return {"success": False, "error": f"Task {task_id} not found"}
+
+                if task_list_id is not None:
+                    cursor.execute(f"SELECT 1 FROM tasklist WHERE TaskListNum = {ph}", (int(task_list_id),))
+                    if not cursor.fetchone():
+                        return {"success": False, "error": f"TaskList {task_list_id} not found"}
+
+                if assigned_user_id is not None and int(assigned_user_id) > 0:
+                    cursor.execute(f"SELECT 1 FROM userod WHERE UserNum = {ph}", (int(assigned_user_id),))
+                    if not cursor.fetchone():
+                        return {"success": False, "error": f"User {assigned_user_id} not found"}
+
+                set_clauses: List[str] = []
+                params: List[Any] = []
+                changed: Dict[str, Any] = {}
+
+                if task_list_id is not None:
+                    set_clauses.append(f"TaskListNum = {ph}")
+                    params.append(int(task_list_id))
+                    changed["TaskListNum"] = int(task_list_id)
+                if assigned_user_id is not None:
+                    set_clauses.append(f"UserNum = {ph}")
+                    params.append(int(assigned_user_id))
+                    changed["UserNum"] = int(assigned_user_id)
+
+                set_clauses.append(f"SecDateTEdit = {self._now_sql()}")
+                params.append(int(task_id))
+                sql = f"UPDATE task SET {', '.join(set_clauses)} WHERE TaskNum = {ph}"
+                cursor.execute(sql, params)
+                affected = cursor.rowcount
+                conn.commit()
+
+                return {
+                    "success": True,
+                    "message": f"Task {task_id} reassigned",
+                    "task_id": int(task_id),
+                    "changed": changed,
+                    "rows_affected": affected,
+                }
+            except Exception as inner:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                raise inner
+            finally:
+                try:
+                    cursor.close()
+                    conn.close()
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.error(f"Error in reassign_task: {e}")
+            return {"success": False, "error": str(e)}
+
+    def _delete_task(self, task_id: Any, delete_notes: bool = True) -> Dict:
+        try:
+            if not task_id:
+                return {"success": False, "error": "task_id is required"}
+
+            conn = self._get_db_connection()
+            if not conn:
+                return {"success": False, "error": "Database connection not configured. Set OPENDENTAL_DB_* environment variables."}
+
+            try:
+                cursor = conn.cursor()
+                ph = self._ph()
+
+                if not self._task_exists(cursor, int(task_id)):
+                    return {"success": False, "error": f"Task {task_id} not found"}
+
+                cursor.execute(f"SELECT COUNT(*) FROM tasknote WHERE TaskNum = {ph}", (int(task_id),))
+                note_count = cursor.fetchone()[0]
+                if note_count > 0 and not delete_notes:
+                    return {
+                        "success": False,
+                        "error": f"Task {task_id} has {note_count} note(s). Set delete_notes=true to remove them.",
+                    }
+
+                deleted_counts: Dict[str, int] = {}
+
+                cursor.execute(f"DELETE FROM tasknote WHERE TaskNum = {ph}", (int(task_id),))
+                deleted_counts["tasknote"] = cursor.rowcount
+
+                cursor.execute(f"DELETE FROM tasksubscription WHERE TaskNum = {ph}", (int(task_id),))
+                deleted_counts["tasksubscription"] = cursor.rowcount
+
+                cursor.execute(f"DELETE FROM taskunread WHERE TaskNum = {ph}", (int(task_id),))
+                deleted_counts["taskunread"] = cursor.rowcount
+
+                cursor.execute(f"DELETE FROM taskancestor WHERE TaskNum = {ph}", (int(task_id),))
+                deleted_counts["taskancestor"] = cursor.rowcount
+
+                cursor.execute(f"DELETE FROM taskattachment WHERE TaskNum = {ph}", (int(task_id),))
+                deleted_counts["taskattachment"] = cursor.rowcount
+
+                cursor.execute(f"DELETE FROM task WHERE TaskNum = {ph}", (int(task_id),))
+                deleted_counts["task"] = cursor.rowcount
+
+                conn.commit()
+
+                return {
+                    "success": True,
+                    "message": f"Task {task_id} deleted",
+                    "task_id": int(task_id),
+                    "deleted_counts": deleted_counts,
+                }
+            except Exception as inner:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                raise inner
+            finally:
+                try:
+                    cursor.close()
+                    conn.close()
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.error(f"Error in delete_task: {e}")
             return {"success": False, "error": str(e)}
 
