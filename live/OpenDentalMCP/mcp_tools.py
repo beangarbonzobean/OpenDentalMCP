@@ -673,6 +673,10 @@ class OpenDentalMCPTools:
                         "IsMirrored": {
                             "type": "boolean",
                             "description": "Optional: True if this is a mirrored appointment (other-op). Added in OD 25.4."
+                        },
+                        "DateTimeArrived": {
+                            "type": "string",
+                            "description": "Optional: Time the patient arrived (YYYY-MM-DD HH:MM:SS). Added in OD 25.2."
                         }
                     },
                     "required": ["PatNum", "AptDateTime", "ProvNum", "Op"]
@@ -715,6 +719,10 @@ class OpenDentalMCPTools:
                         "IsMirrored": {
                             "type": "boolean",
                             "description": "Optional: True if this is a mirrored appointment (other-op). Added in OD 25.4."
+                        },
+                        "DateTimeArrived": {
+                            "type": "string",
+                            "description": "Optional: Time the patient arrived (YYYY-MM-DD HH:MM:SS). Added in OD 25.2."
                         }
                     },
                     "required": ["appointment_id"]
@@ -3061,6 +3069,44 @@ class OpenDentalMCPTools:
                 }
             },
             {
+                "name": "update_commlog",
+                "description": "Update an existing commlog entry. WARNING: This will modify commlog data in Open Dental. Added in OD 25.2.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "commlog_id": {
+                            "type": "string",
+                            "description": "Commlog ID (CommlogNum) to update - required"
+                        },
+                        "Note": {
+                            "type": "string",
+                            "description": "Optional: Updated communication note text"
+                        },
+                        "CommDateTime": {
+                            "type": "string",
+                            "description": "Optional: Date/time of communication (YYYY-MM-DD HH:MM:SS)"
+                        },
+                        "CommType": {
+                            "type": "string",
+                            "description": "Optional: Communication type (DefNum where Category=27)"
+                        },
+                        "commType": {
+                            "type": "string",
+                            "description": "Optional: Communication type by name (ItemName where Category=27). Takes precedence over CommType"
+                        },
+                        "Mode_": {
+                            "type": "string",
+                            "description": "Optional: Communication mode ('None', 'Email', 'Mail', 'Phone', 'In Person', 'Text', 'Email and Text', 'Phone and Text')"
+                        },
+                        "SentOrReceived": {
+                            "type": "string",
+                            "description": "Optional: Direction ('Neither', 'Sent', 'Received')"
+                        }
+                    },
+                    "required": ["commlog_id"]
+                }
+            },
+            {
                 "name": "get_task_lists",
                 "description": "List task lists (the 'buckets' tasks live in, e.g. per-employee lists like 'Ben', 'Nicole'). Returns TaskListNum, Descript, Parent, TaskListStatus.",
                 "inputSchema": {
@@ -3556,6 +3602,8 @@ class OpenDentalMCPTools:
             # ── Commlog tools ──
             elif tool_name == "create_commlog":
                 return self._create_commlog(arguments)
+            elif tool_name == "update_commlog":
+                return self._update_commlog(arguments.get("commlog_id"), arguments)
             # ── Task tools ──
             elif tool_name == "get_task_lists":
                 return self._get_task_lists(
@@ -4603,6 +4651,36 @@ class OpenDentalMCPTools:
             }
         except Exception as e:
             logger.error(f"Error creating commlog: {e}")
+            return {"success": False, "error": str(e)}
+
+    def _update_commlog(self, commlog_id: str, commlog_data: Dict) -> Dict:
+        """Update an existing commlog. PUT /commlogs/{CommlogNum}. Added in OD 25.2."""
+        try:
+            if not commlog_id:
+                return {"success": False, "error": "commlog_id is required"}
+
+            put_fields = [
+                "Note", "CommDateTime", "CommType",
+                "commType", "Mode_", "SentOrReceived",
+            ]
+            payload = {
+                k: v for k, v in commlog_data.items()
+                if k in put_fields and v is not None and v != ""
+            }
+            if not payload:
+                return {
+                    "success": False,
+                    "error": "At least one updatable field must be provided (Note, CommDateTime, CommType, commType, Mode_, SentOrReceived)"
+                }
+
+            result = self._make_request("PUT", f"/commlogs/{commlog_id}", data=payload)
+            return {
+                "success": True,
+                "message": f"Commlog {commlog_id} updated",
+                "commlog": result
+            }
+        except Exception as e:
+            logger.error(f"Error updating commlog: {e}")
             return {"success": False, "error": str(e)}
 
     def _get_patient_aging(self, patient_id: str) -> Dict:
