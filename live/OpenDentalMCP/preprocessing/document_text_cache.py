@@ -175,6 +175,19 @@ def cached_doc_nums(conn: sqlite3.Connection) -> set[int]:
     return {int(r[0]) for r in cur.fetchall()}
 
 
+def terminal_doc_nums(conn: sqlite3.Connection) -> set[int]:
+    """Return DocNums whose status is terminal — won't change on retry.
+
+    Used by backfill to decide what to skip. `error` rows are excluded so
+    transient failures (rate limits, missing env vars, share hiccups) get
+    retried on subsequent runs.
+    """
+    cur = conn.execute(
+        "SELECT DocNum FROM doc_text WHERE Status IN ('ok', 'unreadable', 'unsupported')"
+    )
+    return {int(r[0]) for r in cur.fetchall()}
+
+
 def put_text(conn: sqlite3.Connection, row: DocTextRow) -> None:
     """Insert or replace a row. Status must be one of VALID_STATUS."""
     if row.Status not in VALID_STATUS:

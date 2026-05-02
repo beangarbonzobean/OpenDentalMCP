@@ -122,6 +122,19 @@ def test_cached_doc_nums(cache_path: Path) -> None:
         assert cached_doc_nums(conn) == {1, 5, 9}
 
 
+def test_terminal_doc_nums_excludes_errors(cache_path: Path) -> None:
+    from preprocessing.document_text_cache import terminal_doc_nums
+    with open_cache(cache_path) as conn:
+        put_text(conn, _row(doc_num=1, status="ok", text="hello"))
+        put_text(conn, _row(doc_num=2, status="unreadable"))
+        put_text(conn, _row(doc_num=3, status="unsupported"))
+        put_text(conn, _row(doc_num=4, status="error"))
+        # Terminal = will not change on retry.
+        assert terminal_doc_nums(conn) == {1, 2, 3}
+        # cached_doc_nums returns everything.
+        assert cached_doc_nums(conn) == {1, 2, 3, 4}
+
+
 def test_search_keyword_match_and_pat_filter(cache_path: Path) -> None:
     with open_cache(cache_path) as conn:
         put_text(conn, _row(doc_num=1, pat_num=10, text="patient reports allergy to penicillin"))

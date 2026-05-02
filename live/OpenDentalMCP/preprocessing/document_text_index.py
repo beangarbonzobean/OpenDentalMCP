@@ -413,7 +413,9 @@ def backfill(
 
     try:
         with cache.open_cache(cache_p) as conn:
-            existing = cache.cached_doc_nums(conn)
+            # Skip only docs whose status is terminal (ok / unreadable / unsupported).
+            # Error rows are retried so transient failures don't poison the cache.
+            existing = cache.terminal_doc_nums(conn)
 
             for doc in iter_documents(tools, after_doc_num=after_doc_num):
                 result.scanned += 1

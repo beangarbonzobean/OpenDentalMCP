@@ -316,6 +316,37 @@ def test_backfill_budget_halts(
     assert len(fn.calls) == 2  # type: ignore[attr-defined]
 
 
+def test_backfill_retries_error_rows(
+    fake_tools: FakeTools, share_root: Path, cache_path: Path, lock_path: Path,
+) -> None:
+    """An 'error' row from a prior failed run should be retried, not skipped."""
+    cache.init_cache(cache_path)
+    with cache.open_cache(cache_path) as conn:
+        # Pre-seed an error row for DocNum=1.
+        cache.put_text(conn, cache.DocTextRow(
+            DocNum=1, PatNum=10, Status="error", ErrorMessage="prior failure",
+            OcrAt="2026-04-01",
+        ))
+
+    fake_tools.push_rows("SELECT", [_doc(doc_num=1, pat_num=10), _doc(doc_num=2, pat_num=10)])
+    fake_tools.push_rows("SELECT", [])
+    _write_doc_on_share(share_root, "Young", "Ben", 10, "consent.jpg", b"x")
+
+    fn = _make_ocr_fn(text="recovered")
+    res = idx.backfill(
+        fake_tools, cache_path=cache_path, lock_path=lock_path,
+        max_docs=10, max_spend_usd=1.0, ocr_fn=fn, share_root=share_root,
+    )
+    # Both docs OCR'd: doc 1 retried (was error), doc 2 fresh.
+    assert res.ocrd == 2
+    assert res.skipped_cached == 0
+    with cache.open_cache(cache_path) as conn:
+        r1 = cache.get_text(conn, 1)
+        assert r1 is not None
+        assert r1.Status == "ok"
+        assert r1.Text == "recovered"
+
+
 def test_backfill_idempotent_skips_cached(
     fake_tools: FakeTools, share_root: Path, cache_path: Path, lock_path: Path,
 ) -> None:
