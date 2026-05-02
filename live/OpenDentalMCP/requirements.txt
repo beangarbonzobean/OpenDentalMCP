@@ -7,6 +7,14 @@ elevenlabs>=1.0.0
 Pillow>=10.0
 pypdf>=6.0
 
+# Preprocessing layer (document_text_index)
+portalocker>=2.0
+
+# Test / dev
+pytest>=8.0
+pytest-mock>=3.10
+pytest-cov>=4.0
+
 # Optional database libraries for direct database access (document uploads)
 # Install based on your Open Dental database type:
 # For SQL Server: pip install pyodbc
