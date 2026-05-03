@@ -34,7 +34,13 @@ _WRITE_OPEN_ALLOWLIST: set[tuple[str, str]] = {
 
 
 def _iter_preproc_files() -> list[Path]:
-    return sorted(p for p in PREPROC_DIR.glob("*.py") if p.name != "__init__.py")
+    """All Python files under preprocessing/, recursively. The intake/
+    subpackage is in scope and must pass every rule the top-level files do.
+    """
+    return sorted(
+        p for p in PREPROC_DIR.rglob("*.py")
+        if p.name != "__init__.py"
+    )
 
 
 def _parse(p: Path) -> ast.Module:
