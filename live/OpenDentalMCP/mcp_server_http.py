@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from mcp_tools import OpenDentalMCPTools
 from np_tracker_routes import np_tracker_bp
 from intake_routes import intake_bp
+from ocr_review_routes import ocr_review_bp
 
 # Configure logging
 logging.basicConfig(
@@ -42,6 +43,10 @@ app.register_blueprint(np_tracker_bp)
 # Intake Review blueprint — LAN-only review queue for batch-scan auto-filing.
 # Same RFC-1918 source-IP gate; see intake_routes.py.
 app.register_blueprint(intake_bp)
+
+# OCR Review blueprint — LAN-only review of historical-doc OCR results.
+# Same RFC-1918 source-IP gate; see ocr_review_routes.py.
+app.register_blueprint(ocr_review_bp)
 
 
 @app.route('/health', methods=['GET'])

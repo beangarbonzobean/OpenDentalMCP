@@ -23,7 +23,7 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Iterator, List, Optional
 
@@ -49,6 +49,14 @@ class DocTextRow:
     Status: str = "ok"
     ErrorMessage: Optional[str] = None
     CostUsd: Optional[float] = None
+    # Reviewed columns track the human-in-the-loop quality check from the
+    # /ocr-review/ UI. Reviewed=0 -> needs review; 1 -> approved by staff.
+    # Approved rows aren't materially different from un-reviewed for the
+    # search functionality — the flag is purely so the review UI can hide
+    # them from the "needs review" default view.
+    Reviewed: int = 0
+    ReviewedAt: Optional[str] = None
+    ReviewedBy: Optional[str] = None
 
 
 @dataclass
@@ -75,9 +83,14 @@ CREATE TABLE IF NOT EXISTS doc_text (
     OcrAt         TEXT NOT NULL,
     Status        TEXT NOT NULL DEFAULT 'ok',
     ErrorMessage  TEXT,
-    CostUsd       REAL
+    CostUsd       REAL,
+    Reviewed      INTEGER NOT NULL DEFAULT 0,
+    ReviewedAt    TEXT,
+    ReviewedBy    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_doc_text_pat ON doc_text(PatNum);
+-- Indexes on Reviewed and OcrAt are created in _migrate_add_review_columns
+-- so they don't fire on legacy DBs that don't yet have those columns.
 
 CREATE VIRTUAL TABLE IF NOT EXISTS doc_text_fts USING fts5(
     Text,
@@ -114,17 +127,41 @@ def _connect(path: Path) -> sqlite3.Connection:
 
 
 def init_cache(path: Optional[Path] = None) -> Path:
-    """Create the cache file and schema if missing. Returns the path used."""
+    """Create the cache file and schema if missing. Returns the path used.
+
+    For existing cache files predating the Reviewed columns, the migration
+    runs idempotently (column-add only — never DROPs anything).
+    """
     p = Path(path) if path is not None else DEFAULT_CACHE_PATH
     p.parent.mkdir(parents=True, exist_ok=True)
     with _init_lock:
         conn = _connect(p)
         try:
             conn.executescript(_SCHEMA_SQL)
+            _migrate_add_review_columns(conn)
             conn.commit()
         finally:
             conn.close()
     return p
+
+
+def _migrate_add_review_columns(conn: sqlite3.Connection) -> None:
+    """Add Reviewed/ReviewedAt/ReviewedBy columns to legacy databases.
+
+    SQLite supports ALTER TABLE ADD COLUMN but not IF NOT EXISTS on it,
+    so we check the table's existing columns first.
+    """
+    cur = conn.execute("PRAGMA table_info(doc_text)")
+    have = {r[1] for r in cur.fetchall()}
+    if "Reviewed" not in have:
+        conn.execute("ALTER TABLE doc_text ADD COLUMN Reviewed INTEGER NOT NULL DEFAULT 0")
+    if "ReviewedAt" not in have:
+        conn.execute("ALTER TABLE doc_text ADD COLUMN ReviewedAt TEXT")
+    if "ReviewedBy" not in have:
+        conn.execute("ALTER TABLE doc_text ADD COLUMN ReviewedBy TEXT")
+    # Also ensure the new indexes exist on legacy DBs.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_doc_text_ocr_at   ON doc_text(OcrAt)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_doc_text_reviewed ON doc_text(Reviewed)")
 
 
 @contextmanager
@@ -194,12 +231,16 @@ def put_text(conn: sqlite3.Connection, row: DocTextRow) -> None:
         raise ValueError(f"invalid status: {row.Status!r}")
     if row.PatNum is None or row.DocNum is None:
         raise ValueError("DocNum and PatNum are required")
+    # On conflict (re-OCR of an existing DocNum), reset Reviewed=0 because
+    # the OCR content may have changed and any prior approval shouldn't
+    # automatically carry over to new text.
     conn.execute(
         """
         INSERT INTO doc_text
             (DocNum, PatNum, FileName, DocCategory, DateCreated, Text,
-             PageCount, Sha256, OcrModel, OcrAt, Status, ErrorMessage, CostUsd)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             PageCount, Sha256, OcrModel, OcrAt, Status, ErrorMessage, CostUsd,
+             Reviewed, ReviewedAt, ReviewedBy)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(DocNum) DO UPDATE SET
             PatNum=excluded.PatNum,
             FileName=excluded.FileName,
@@ -212,15 +253,132 @@ def put_text(conn: sqlite3.Connection, row: DocTextRow) -> None:
             OcrAt=excluded.OcrAt,
             Status=excluded.Status,
             ErrorMessage=excluded.ErrorMessage,
-            CostUsd=excluded.CostUsd
+            CostUsd=excluded.CostUsd,
+            Reviewed=0,
+            ReviewedAt=NULL,
+            ReviewedBy=NULL
         """,
         (
             int(row.DocNum), int(row.PatNum), row.FileName, row.DocCategory,
             row.DateCreated, row.Text, row.PageCount, row.Sha256,
             row.OcrModel, row.OcrAt, row.Status, row.ErrorMessage, row.CostUsd,
+            int(row.Reviewed or 0), row.ReviewedAt, row.ReviewedBy,
         ),
     )
     conn.commit()
+
+
+def mark_reviewed(
+    conn: sqlite3.Connection,
+    doc_num: int,
+    *,
+    reviewer: str,
+) -> bool:
+    """Approve a doc_text row from the OCR review UI. Returns True if a row
+    was updated. Does not modify the OCR text — just marks the audit fields.
+    """
+    cur = conn.execute(
+        "UPDATE doc_text SET Reviewed = 1, ReviewedAt = ?, ReviewedBy = ? "
+        "WHERE DocNum = ?",
+        (datetime.now(timezone.utc).isoformat(), str(reviewer), int(doc_num)),
+    )
+    conn.commit()
+    return (cur.rowcount or 0) > 0
+
+
+def unmark_reviewed(conn: sqlite3.Connection, doc_num: int) -> bool:
+    """Reverse a review approval (puts the row back into the queue)."""
+    cur = conn.execute(
+        "UPDATE doc_text SET Reviewed = 0, ReviewedAt = NULL, ReviewedBy = NULL "
+        "WHERE DocNum = ?",
+        (int(doc_num),),
+    )
+    conn.commit()
+    return (cur.rowcount or 0) > 0
+
+
+def delete_doc_text(conn: sqlite3.Connection, doc_num: int) -> bool:
+    """Drop a single OCR row from the cache. Used by the review UI when a
+    user flags an OCR result as bad ("flag for re-OCR"). Next backfill run
+    will re-process the doc since it's no longer in terminal_doc_nums.
+
+    Returns True if a row was deleted. The FTS5 trigger also removes the
+    row from the search index automatically.
+    """
+    cur = conn.execute("DELETE FROM doc_text WHERE DocNum = ?", (int(doc_num),))
+    conn.commit()
+    return (cur.rowcount or 0) > 0
+
+
+def list_recent_docs(
+    conn: sqlite3.Connection,
+    *,
+    since_iso: Optional[str] = None,
+    only_unreviewed: bool = True,
+    status_in: Optional[List[str]] = None,
+    doc_category: Optional[int] = None,
+    limit: int = 200,
+    offset: int = 0,
+) -> List[DocTextRow]:
+    """Recent OCR'd docs for the review UI.
+
+    Default: rows OCR'd in the last 7 days that haven't been reviewed yet.
+    Filterable by status, category, recency.
+    """
+    if since_iso is None:
+        since_dt = datetime.now(timezone.utc) - timedelta(days=7)
+        since_iso = since_dt.isoformat()
+    base = "SELECT * FROM doc_text WHERE OcrAt >= ?"
+    params: list = [since_iso]
+    if only_unreviewed:
+        base += " AND Reviewed = 0"
+    if status_in:
+        placeholders = ",".join("?" * len(status_in))
+        base += f" AND Status IN ({placeholders})"
+        params.extend(status_in)
+    if doc_category is not None:
+        base += " AND DocCategory = ?"
+        params.append(int(doc_category))
+    base += " ORDER BY OcrAt DESC, DocNum DESC LIMIT ? OFFSET ?"
+    params.extend([int(limit), int(offset)])
+    return [_row_to_dataclass(r) for r in conn.execute(base, params).fetchall()]
+
+
+def review_summary(
+    conn: sqlite3.Connection,
+    *,
+    since_iso: Optional[str] = None,
+) -> dict:
+    """Counts + stats for the review UI dashboard, scoped to a recency window."""
+    if since_iso is None:
+        since_dt = datetime.now(timezone.utc) - timedelta(days=7)
+        since_iso = since_dt.isoformat()
+    by_status = {}
+    for r in conn.execute(
+        "SELECT Status, COUNT(*) AS n FROM doc_text WHERE OcrAt >= ? GROUP BY Status",
+        (since_iso,),
+    ).fetchall():
+        by_status[r["Status"]] = int(r["n"])
+    total = sum(by_status.values())
+    unreviewed = conn.execute(
+        "SELECT COUNT(*) FROM doc_text WHERE OcrAt >= ? AND Reviewed = 0",
+        (since_iso,),
+    ).fetchone()[0]
+    cost_total = conn.execute(
+        "SELECT COALESCE(SUM(CostUsd), 0) FROM doc_text WHERE OcrAt >= ?",
+        (since_iso,),
+    ).fetchone()[0]
+    last_run = conn.execute(
+        "SELECT MAX(OcrAt) FROM doc_text"
+    ).fetchone()[0]
+    return {
+        "since": since_iso,
+        "total": total,
+        "by_status": by_status,
+        "unreviewed": int(unreviewed),
+        "cost_usd_total": float(cost_total or 0.0),
+        "last_run": last_run,
+    }
 
 
 def prune_orphans(conn: sqlite3.Connection, known_doc_nums: Iterable[int]) -> int:
@@ -325,4 +483,7 @@ def _row_to_dataclass(r: sqlite3.Row) -> DocTextRow:
         Status=r["Status"],
         ErrorMessage=r["ErrorMessage"],
         CostUsd=r["CostUsd"],
+        Reviewed=int(r["Reviewed"]) if "Reviewed" in r.keys() else 0,
+        ReviewedAt=r["ReviewedAt"] if "ReviewedAt" in r.keys() else None,
+        ReviewedBy=r["ReviewedBy"] if "ReviewedBy" in r.keys() else None,
     )
