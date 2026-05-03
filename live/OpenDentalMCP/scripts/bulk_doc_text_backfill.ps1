@@ -52,15 +52,17 @@ if ($apiKey) { $env:ANTHROPIC_API_KEY = $apiKey }
 # of new docs eventually. The Haiku-fallback budget caps cost ceiling.
 $maxDocs    = 999999
 $maxSpend   = 30.00   # bulk run can rescue ~3000 problem pages via Haiku before halting
+$workers    = 4       # matches OLLAMA_NUM_PARALLEL=4 on the GPU host
 
 $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-Write-Output "[$timestamp] Starting BULK backfill: max_docs=$maxDocs max_spend=`$$maxSpend"
+Write-Output "[$timestamp] Starting BULK backfill: max_docs=$maxDocs max_spend=`$$maxSpend workers=$workers"
 Write-Output "[$timestamp] Bulk runs share the lock with the nightly task. Safe to interrupt with Ctrl+C — the cache is committed per-doc."
 $start = Get-Date
 
 & "$Root\.venv\Scripts\python.exe" "$Root\scripts\rebuild_document_text_index.py" `
     --max-docs=$maxDocs `
     --max-spend=$maxSpend `
+    --workers=$workers `
     --log-level=INFO
 
 $elapsed = (Get-Date) - $start

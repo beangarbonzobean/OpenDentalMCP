@@ -386,6 +386,7 @@ def backfill(
     after_doc_num: int = 0,
     prune: bool = False,
     dry_run: bool = False,
+    workers: int = 1,
     skip_categories: Optional[set[int]] = None,
     file_loader: Optional[Callable[[OdDocRow], bytes]] = None,
     ocr_fn: Optional[Callable[..., ocr_helper.OcrResult]] = None,
@@ -393,6 +394,14 @@ def backfill(
     lock_path: Optional[Path] = None,
 ) -> BackfillResult:
     """Iterate the document table and OCR uncached docs.
+
+    `workers` controls client-side concurrency. workers=1 keeps the original
+    sequential behavior (and is what tests assume for budget/halt determinism).
+    workers>1 dispatches OCR via a ThreadPoolExecutor with bounded backpressure
+    (queue depth = workers * 2). Each worker uses its own SQLite connection and
+    writes through SQLite WAL mode. Counter mutations and budget checks happen
+    in the main thread as futures complete, so there's no shared mutable state
+    between workers.
 
     Returns a BackfillResult with running counters. Halts on:
       - max_docs reached  (halted_reason='max_docs')
@@ -410,6 +419,7 @@ def backfill(
 
     skip = skip_categories if skip_categories is not None else _skip_categories()
     result = BackfillResult(success=True)
+    workers = max(1, int(workers))
 
     try:
         with cache.open_cache(cache_p) as conn:
@@ -417,49 +427,30 @@ def backfill(
             # Error rows are retried so transient failures don't poison the cache.
             existing = cache.terminal_doc_nums(conn)
 
-            for doc in iter_documents(tools, after_doc_num=after_doc_num):
-                result.scanned += 1
-
-                if doc.DocNum in existing:
-                    result.skipped_cached += 1
-                    if result.scanned >= max_docs:
-                        result.halted_reason = "max_docs"
-                        break
-                    continue
-
-                if dry_run:
-                    log.info("dry-run would-OCR DocNum=%s File=%s", doc.DocNum, doc.FileName)
-                    if result.scanned >= max_docs:
-                        result.halted_reason = "max_docs"
-                        break
-                    continue
-
-                if result.cost_usd_estimate >= max_spend_usd:
-                    result.halted_reason = "budget"
-                    break
-
-                row = ocr_one_document(
-                    doc,
-                    skip_categories=skip,
+            if workers <= 1 or dry_run:
+                _backfill_sequential(
+                    tools, conn, result, existing,
+                    after_doc_num=after_doc_num,
+                    max_docs=max_docs,
+                    max_spend_usd=max_spend_usd,
+                    dry_run=dry_run,
+                    skip=skip,
                     file_loader=file_loader,
                     ocr_fn=ocr_fn,
                     share_root=share_root,
                 )
-                cache.put_text(conn, row)
-
-                if row.Status == "ok" or row.Status == "unreadable":
-                    result.ocrd += 1
-                elif row.Status == "unsupported":
-                    result.skipped_unsupported += 1
-                elif row.Status == "error":
-                    result.errors += 1
-
-                if row.CostUsd:
-                    result.cost_usd_estimate += float(row.CostUsd)
-
-                if result.scanned >= max_docs:
-                    result.halted_reason = "max_docs"
-                    break
+            else:
+                _backfill_parallel(
+                    tools, cache_p, result, existing,
+                    after_doc_num=after_doc_num,
+                    max_docs=max_docs,
+                    max_spend_usd=max_spend_usd,
+                    workers=workers,
+                    skip=skip,
+                    file_loader=file_loader,
+                    ocr_fn=ocr_fn,
+                    share_root=share_root,
+                )
 
             if prune and not dry_run:
                 known = all_doc_nums(tools)
@@ -474,6 +465,144 @@ def backfill(
         result.build_seconds = round(time.monotonic() - started, 3)
 
     return result
+
+
+def _apply_row_to_result(result: BackfillResult, row: cache.DocTextRow) -> None:
+    """Bump counters and cost from a single OCR'd row. Main-thread only."""
+    if row.Status == "ok" or row.Status == "unreadable":
+        result.ocrd += 1
+    elif row.Status == "unsupported":
+        result.skipped_unsupported += 1
+    elif row.Status == "error":
+        result.errors += 1
+    if row.CostUsd:
+        result.cost_usd_estimate += float(row.CostUsd)
+
+
+def _backfill_sequential(
+    tools: Any, conn, result: BackfillResult, existing: set[int],
+    *, after_doc_num: int, max_docs: int, max_spend_usd: float, dry_run: bool,
+    skip: set[int], file_loader, ocr_fn, share_root,
+) -> None:
+    """Original single-threaded loop. Preserved as the workers=1 path."""
+    for doc in iter_documents(tools, after_doc_num=after_doc_num):
+        result.scanned += 1
+
+        if doc.DocNum in existing:
+            result.skipped_cached += 1
+            if result.scanned >= max_docs:
+                result.halted_reason = "max_docs"
+                break
+            continue
+
+        if dry_run:
+            log.info("dry-run would-OCR DocNum=%s File=%s", doc.DocNum, doc.FileName)
+            if result.scanned >= max_docs:
+                result.halted_reason = "max_docs"
+                break
+            continue
+
+        if result.cost_usd_estimate >= max_spend_usd:
+            result.halted_reason = "budget"
+            break
+
+        row = ocr_one_document(
+            doc,
+            skip_categories=skip,
+            file_loader=file_loader,
+            ocr_fn=ocr_fn,
+            share_root=share_root,
+        )
+        cache.put_text(conn, row)
+        _apply_row_to_result(result, row)
+
+        if result.scanned >= max_docs:
+            result.halted_reason = "max_docs"
+            break
+
+
+def _backfill_parallel(
+    tools: Any, cache_p: Path, result: BackfillResult, existing: set[int],
+    *, after_doc_num: int, max_docs: int, max_spend_usd: float, workers: int,
+    skip: set[int], file_loader, ocr_fn, share_root,
+) -> None:
+    """Parallel path: ThreadPoolExecutor with bounded backpressure.
+
+    Each worker opens its own SQLite cache connection and writes via WAL.
+    The main thread mutates `result` as futures complete; budget/cap checks
+    happen between submits. In-flight futures are allowed to complete after
+    a halt — we don't cancel mid-OCR.
+    """
+    from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+
+    def _worker(doc: OdDocRow) -> cache.DocTextRow:
+        row = ocr_one_document(
+            doc,
+            skip_categories=skip,
+            file_loader=file_loader,
+            ocr_fn=ocr_fn,
+            share_root=share_root,
+        )
+        # Each worker uses its own connection — sqlite3 connections aren't
+        # safely shared across threads. WAL mode + per-connection commit
+        # serializes writes correctly.
+        with cache.open_cache(cache_p) as worker_conn:
+            cache.put_text(worker_conn, row)
+        return row
+
+    in_flight: set = set()
+    halted = False
+
+    def _drain_one() -> None:
+        nonlocal halted
+        done, _pending = wait(in_flight, return_when=FIRST_COMPLETED)
+        for f in done:
+            in_flight.discard(f)
+            try:
+                row = f.result()
+            except Exception as e:  # belt and suspenders
+                log.exception("worker raised: %s", e)
+                result.errors += 1
+                continue
+            _apply_row_to_result(result, row)
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for doc in iter_documents(tools, after_doc_num=after_doc_num):
+            result.scanned += 1
+
+            if doc.DocNum in existing:
+                result.skipped_cached += 1
+                if result.scanned >= max_docs:
+                    result.halted_reason = "max_docs"
+                    halted = True
+                    break
+                continue
+
+            # Drain enough in-flight work that we don't queue unbounded.
+            while len(in_flight) >= workers * 2:
+                _drain_one()
+                if result.cost_usd_estimate >= max_spend_usd:
+                    result.halted_reason = "budget"
+                    halted = True
+                    break
+            if halted:
+                break
+
+            if result.cost_usd_estimate >= max_spend_usd:
+                result.halted_reason = "budget"
+                halted = True
+                break
+
+            in_flight.add(pool.submit(_worker, doc))
+
+            if result.scanned >= max_docs:
+                result.halted_reason = "max_docs"
+                halted = True
+                break
+
+        # Drain remaining workers — let already-submitted OCRs finish.
+        while in_flight:
+            _drain_one()
 
 
 # ---------------------------------------------------------------------------

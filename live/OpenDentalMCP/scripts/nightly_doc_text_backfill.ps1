@@ -31,19 +31,23 @@ $env:LOCAL_VLM_DPI                  = '150'
 $env:LOCAL_VLM_HAIKU_PAGE_FALLBACK  = 'true'  # rescue pages that crash both local models
 if ($apiKey) { $env:ANTHROPIC_API_KEY = $apiKey }
 
-# Per-run caps. Wall-clock budget aims for ~9 hours overnight (21:00 -> 06:00).
-#   ~1.5 pages/doc avg * ~7s/page on glm-ocr = ~10s/doc
-#   2500 docs * 10s = ~7 hours; some buffer for the long-tail multi-page outliers
-$maxDocs    = 2500
+# Per-run caps. With workers=4 + OLLAMA_NUM_PARALLEL=4 on the GPU host we
+# get ~3-4x throughput vs sequential. Wall-clock budget ~9 hours (21:00 -> 06:00).
+#   sequential: ~10s/doc -> ~3,200 docs/9h
+#   parallel-4: ~3s/doc effective -> ~10,000 docs/9h
+# We cap at 8,000 to leave buffer for multi-page outliers and unforeseen slowdowns.
+$maxDocs    = 8000
 $maxSpend   = 5.00   # Haiku page-fallback cost ceiling per night
+$workers    = 4
 
 $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-Write-Output "[$timestamp] Starting nightly backfill: max_docs=$maxDocs max_spend=`$$maxSpend"
+Write-Output "[$timestamp] Starting nightly backfill: max_docs=$maxDocs max_spend=`$$maxSpend workers=$workers"
 $start = Get-Date
 
 & "$Root\.venv\Scripts\python.exe" "$Root\scripts\rebuild_document_text_index.py" `
     --max-docs=$maxDocs `
     --max-spend=$maxSpend `
+    --workers=$workers `
     --log-level=INFO
 
 $elapsed = (Get-Date) - $start

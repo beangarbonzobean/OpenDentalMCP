@@ -41,6 +41,9 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="List would-be-OCR'd docs, make no API calls, write no cache rows.")
     p.add_argument("--after-doc-num", type=int, default=0,
                    help="Resume cursor (DocNum greater-than).")
+    p.add_argument("--workers", type=int, default=1,
+                   help="Client-side concurrency (default 1). Set to 4 with "
+                        "OLLAMA_NUM_PARALLEL=4 on the GPU host for ~3-4x speedup.")
     p.add_argument("--log-level", default="INFO")
     return p
 
@@ -73,8 +76,8 @@ def main(argv: list[str] | None = None) -> int:
 
     tools = mcp_tools.OpenDentalMCPTools()  # type: ignore[attr-defined]
     log.info(
-        "starting backfill: max_docs=%d max_spend=$%.2f prune=%s dry_run=%s after=%d",
-        args.max_docs, args.max_spend, args.prune, args.dry_run, args.after_doc_num,
+        "starting backfill: max_docs=%d max_spend=$%.2f workers=%d prune=%s dry_run=%s after=%d",
+        args.max_docs, args.max_spend, args.workers, args.prune, args.dry_run, args.after_doc_num,
     )
     res = idx.backfill(
         tools,
@@ -83,6 +86,7 @@ def main(argv: list[str] | None = None) -> int:
         after_doc_num=args.after_doc_num,
         prune=args.prune,
         dry_run=args.dry_run,
+        workers=args.workers,
     )
     log.info("backfill result: %s", json.dumps(asdict(res), default=str))
     return 0 if res.success else 1

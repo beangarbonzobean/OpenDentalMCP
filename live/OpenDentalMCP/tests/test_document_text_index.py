@@ -492,6 +492,195 @@ def test_fetch_or_ocr_missing_in_od(
     assert row is None
 
 
+# ---------------------------------------------------------------------------
+# Parallel backfill (workers > 1)
+# ---------------------------------------------------------------------------
+
+def test_backfill_parallel_processes_all_docs(
+    fake_tools: FakeTools, share_root: Path, cache_path: Path, lock_path: Path,
+) -> None:
+    """workers=4 should process all docs and end in a consistent state."""
+    n_docs = 20
+    rows = [_doc(doc_num=i, pat_num=10) for i in range(1, n_docs + 1)]
+    fake_tools.push_rows("SELECT", rows)
+    fake_tools.push_rows("SELECT", [])
+    for r in rows:
+        _write_doc_on_share(share_root, "Young", "Ben", 10, r["FileName"], b"x")
+
+    fn = _make_ocr_fn(text="parallel ok")
+    res = idx.backfill(
+        fake_tools, cache_path=cache_path, lock_path=lock_path,
+        max_docs=100, max_spend_usd=10.0, workers=4,
+        ocr_fn=fn, share_root=share_root,
+    )
+    assert res.success is True
+    assert res.scanned == n_docs
+    assert res.ocrd == n_docs
+    assert res.errors == 0
+    assert len(fn.calls) == n_docs  # type: ignore[attr-defined]
+    with cache.open_cache(cache_path) as conn:
+        nums = cache.cached_doc_nums(conn)
+        assert len(nums) == n_docs
+
+
+def test_backfill_parallel_max_docs_halts(
+    fake_tools: FakeTools, share_root: Path, cache_path: Path, lock_path: Path,
+) -> None:
+    rows = [_doc(doc_num=i, pat_num=10) for i in range(1, 21)]
+    fake_tools.push_rows("SELECT", rows)
+    fake_tools.push_rows("SELECT", [])
+    for r in rows:
+        _write_doc_on_share(share_root, "Young", "Ben", 10, r["FileName"], b"x")
+
+    fn = _make_ocr_fn()
+    res = idx.backfill(
+        fake_tools, cache_path=cache_path, lock_path=lock_path,
+        max_docs=8, max_spend_usd=10.0, workers=3,
+        ocr_fn=fn, share_root=share_root,
+    )
+    assert res.scanned == 8
+    assert res.halted_reason == "max_docs"
+    # All in-flight at the time of halt are allowed to finish
+    assert res.ocrd <= 8
+    assert res.ocrd >= 1
+
+
+def test_backfill_parallel_budget_halts(
+    fake_tools: FakeTools, share_root: Path, cache_path: Path, lock_path: Path,
+) -> None:
+    """Budget cap halts the loop. In parallel, in-flight workers may slightly
+    overshoot the cap — that's expected and bounded by `workers`."""
+    rows = [_doc(doc_num=i, pat_num=10) for i in range(1, 21)]
+    fake_tools.push_rows("SELECT", rows)
+    fake_tools.push_rows("SELECT", [])
+    for r in rows:
+        _write_doc_on_share(share_root, "Young", "Ben", 10, r["FileName"], b"x")
+
+    # Each Haiku-fallback page is $0.01; here we pretend every doc costs that.
+    fn = _make_ocr_fn(cost=0.01)
+    res = idx.backfill(
+        fake_tools, cache_path=cache_path, lock_path=lock_path,
+        max_docs=20, max_spend_usd=0.05, workers=4,
+        ocr_fn=fn, share_root=share_root,
+    )
+    assert res.halted_reason == "budget"
+    # Budget triggers once running cost_usd_estimate >= max_spend_usd, i.e.
+    # after at least 5 docs at $0.01 each have completed. The backpressure
+    # queue depth is workers*2, so up to that many additional in-flight
+    # workers may finish after the halt is set. Bound: budget_count + 2*workers.
+    assert res.ocrd >= 5
+    assert res.ocrd <= 5 + 2 * 4
+
+
+def test_backfill_parallel_cached_docs_are_skipped(
+    fake_tools: FakeTools, share_root: Path, cache_path: Path, lock_path: Path,
+) -> None:
+    """A pre-populated cache row means the parallel path skips that DocNum."""
+    cache.init_cache(cache_path)
+    with cache.open_cache(cache_path) as conn:
+        cache.put_text(conn, cache.DocTextRow(
+            DocNum=1, PatNum=10, Text="already cached",
+            OcrAt="2026-04-01", Status="ok",
+        ))
+    rows = [_doc(doc_num=i, pat_num=10) for i in range(1, 6)]
+    fake_tools.push_rows("SELECT", rows)
+    fake_tools.push_rows("SELECT", [])
+    for r in rows:
+        _write_doc_on_share(share_root, "Young", "Ben", 10, r["FileName"], b"x")
+
+    fn = _make_ocr_fn()
+    res = idx.backfill(
+        fake_tools, cache_path=cache_path, lock_path=lock_path,
+        max_docs=10, max_spend_usd=1.0, workers=4,
+        ocr_fn=fn, share_root=share_root,
+    )
+    assert res.skipped_cached == 1
+    assert res.ocrd == 4
+    assert len(fn.calls) == 4  # type: ignore[attr-defined]
+
+
+def test_backfill_parallel_dry_run_uses_sequential_path(
+    fake_tools: FakeTools, share_root: Path, cache_path: Path, lock_path: Path,
+) -> None:
+    """dry_run=True forces sequential, even when workers>1, for deterministic
+    log output."""
+    rows = [_doc(doc_num=i, pat_num=10) for i in range(1, 6)]
+    fake_tools.push_rows("SELECT", rows)
+    fake_tools.push_rows("SELECT", [])
+    fn = _make_ocr_fn()
+    res = idx.backfill(
+        fake_tools, cache_path=cache_path, lock_path=lock_path,
+        max_docs=10, max_spend_usd=1.0, workers=4, dry_run=True,
+        ocr_fn=fn, share_root=share_root,
+    )
+    assert res.scanned == 5
+    assert res.ocrd == 0
+    assert fn.calls == []  # type: ignore[attr-defined]
+
+
+def test_backfill_parallel_worker_exception_counts_as_error(
+    fake_tools: FakeTools, share_root: Path, cache_path: Path, lock_path: Path,
+) -> None:
+    """If the worker function itself raises (not an OcrError but a programmer
+    bug), the future fails. The drain code logs it and increments errors."""
+    rows = [_doc(doc_num=i, pat_num=10) for i in range(1, 6)]
+    fake_tools.push_rows("SELECT", rows)
+    fake_tools.push_rows("SELECT", [])
+    for r in rows:
+        _write_doc_on_share(share_root, "Young", "Ben", 10, r["FileName"], b"x")
+
+    # Make the OCR helper raise an unexpected exception (not OcrError) to bubble
+    # past ocr_one_document's catches into the worker and surface in .result().
+    def boom_in_thread(*a, **kw):
+        raise RuntimeError("simulated worker bug")
+
+    # Patch document_text_cache.put_text to fail half the time so the future
+    # raises after ocr_one_document succeeds. This exercises the future-result
+    # exception path in _drain_one.
+    import preprocessing.document_text_cache as dtc
+    real_put = dtc.put_text
+    counter = {"n": 0}
+
+    def flaky_put(conn, row):
+        counter["n"] += 1
+        if counter["n"] % 2 == 0:
+            raise RuntimeError("simulated cache write fail")
+        return real_put(conn, row)
+
+    import unittest.mock as _mock
+    with _mock.patch.object(dtc, "put_text", side_effect=flaky_put):
+        fn = _make_ocr_fn(text="ok")
+        res = idx.backfill(
+            fake_tools, cache_path=cache_path, lock_path=lock_path,
+            max_docs=10, max_spend_usd=1.0, workers=2,
+            ocr_fn=fn, share_root=share_root,
+        )
+    # Some succeed, some are counted as errors via the drain exception path.
+    assert res.success is True
+    assert res.scanned == 5
+    assert res.ocrd + res.errors == 5
+    assert res.errors >= 1
+
+
+def test_backfill_workers_clamped_to_one_minimum(
+    fake_tools: FakeTools, share_root: Path, cache_path: Path, lock_path: Path,
+) -> None:
+    """workers<=1 (including 0 or negative) routes through the sequential path."""
+    rows = [_doc(doc_num=i, pat_num=10) for i in range(1, 4)]
+    fake_tools.push_rows("SELECT", rows)
+    fake_tools.push_rows("SELECT", [])
+    for r in rows:
+        _write_doc_on_share(share_root, "Young", "Ben", 10, r["FileName"], b"x")
+
+    fn = _make_ocr_fn()
+    res = idx.backfill(
+        fake_tools, cache_path=cache_path, lock_path=lock_path,
+        max_docs=10, max_spend_usd=1.0, workers=0,
+        ocr_fn=fn, share_root=share_root,
+    )
+    assert res.ocrd == 3
+
+
 def test_fetch_or_ocr_re_ocrs_when_previously_errored(
     fake_tools: FakeTools, share_root: Path, cache_path: Path,
 ) -> None:
