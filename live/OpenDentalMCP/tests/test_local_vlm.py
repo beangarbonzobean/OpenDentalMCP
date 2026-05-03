@@ -331,3 +331,129 @@ def test_ocr_bytes_local_does_not_fall_back(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(oh, "_ocr_via_local", local_explode)
     with pytest.raises(OcrError):
         oh.ocr_bytes(b"x", media_type="image/png")
+
+
+# ---------------------------------------------------------------------------
+# Per-page Haiku fallback (3rd tier)
+# ---------------------------------------------------------------------------
+
+def _fake_haiku(text: str, *, cost: float = 0.01, in_tok: int = 200, out_tok: int = 100):
+    """Build a fake haiku_caller that returns a fixed OcrResult."""
+    def _call(page_bytes: bytes, media_type: str) -> OcrResult:
+        return OcrResult(
+            text=text, model="claude-haiku-4-5-20251001",
+            input_tokens=in_tok, output_tokens=out_tok,
+            cost_usd=cost, media_type=media_type, is_unreadable=False,
+        )
+    return _call
+
+
+def test_haiku_page_fallback_disabled_by_default() -> None:
+    """When haiku_page_fallback=False, both local tiers failing raises OcrError."""
+    poster = FakePoster()
+    poster.add_failure(LOCAL_PRIMARY_DEFAULT, "fail 1")
+    poster.add_failure(LOCAL_PRIMARY_DEFAULT, "fail 2")
+    poster.add_failure(LOCAL_FALLBACK_DEFAULT, "fail 3")
+    haiku_called = {"n": 0}
+    def haiku_caller(*a, **kw):
+        haiku_called["n"] += 1
+        return _fake_haiku("haiku saved")(*a, **kw)
+    with pytest.raises(OcrError):
+        _ocr_via_local(b"x", media_type="image/png", http_post=poster,
+                        haiku_caller=haiku_caller, haiku_page_fallback=False)
+    assert haiku_called["n"] == 0
+
+
+def test_haiku_page_fallback_enabled_rescues_failed_page() -> None:
+    poster = FakePoster()
+    poster.add_failure(LOCAL_PRIMARY_DEFAULT, "fail 1")
+    poster.add_failure(LOCAL_PRIMARY_DEFAULT, "fail 2")
+    poster.add_failure(LOCAL_FALLBACK_DEFAULT, "fail 3")
+    res = _ocr_via_local(
+        b"x", media_type="image/png",
+        http_post=poster,
+        haiku_page_fallback=True,
+        haiku_caller=_fake_haiku("haiku saved", cost=0.012),
+    )
+    assert res.text == "haiku saved"
+    assert "claude-haiku" in res.model
+    assert res.cost_usd == pytest.approx(0.012)
+    assert res.input_tokens == 200
+    assert res.output_tokens == 100
+
+
+def test_haiku_page_fallback_also_failing_raises() -> None:
+    poster = FakePoster()
+    poster.add_failure(LOCAL_PRIMARY_DEFAULT, "fail 1")
+    poster.add_failure(LOCAL_PRIMARY_DEFAULT, "fail 2")
+    poster.add_failure(LOCAL_FALLBACK_DEFAULT, "fail 3")
+    def haiku_explodes(page_bytes, media_type):
+        raise OcrError("haiku also broken")
+    with pytest.raises(OcrError) as ei:
+        _ocr_via_local(b"x", media_type="image/png",
+                        http_post=poster,
+                        haiku_page_fallback=True,
+                        haiku_caller=haiku_explodes)
+    assert "+haiku" in str(ei.value)
+
+
+def test_haiku_page_fallback_env_var_enables_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOCAL_VLM_HAIKU_PAGE_FALLBACK", "true")
+    poster = FakePoster()
+    poster.add_failure(LOCAL_PRIMARY_DEFAULT, "fail 1")
+    poster.add_failure(LOCAL_PRIMARY_DEFAULT, "fail 2")
+    poster.add_failure(LOCAL_FALLBACK_DEFAULT, "fail 3")
+    res = _ocr_via_local(
+        b"x", media_type="image/png",
+        http_post=poster,
+        haiku_caller=_fake_haiku("env enabled"),
+    )
+    assert res.text == "env enabled"
+
+
+def test_haiku_page_fallback_only_for_failing_pages_in_pdf() -> None:
+    """In a 3-page PDF where page 2 fails on both local models, only page 2
+    incurs Haiku cost. Pages 1 and 3 stay free."""
+    poster = FakePoster()
+    # Page 0 local primary OK
+    poster.add_response(LOCAL_PRIMARY_DEFAULT, "page 0 local")
+    # Page 1: primary fails twice + fallback fails
+    poster.add_failure(LOCAL_PRIMARY_DEFAULT, "p1 fail 1")
+    poster.add_failure(LOCAL_PRIMARY_DEFAULT, "p1 fail 2")
+    poster.add_failure(LOCAL_FALLBACK_DEFAULT, "p1 fallback fail")
+    # Page 2 local primary OK
+    poster.add_response(LOCAL_PRIMARY_DEFAULT, "page 2 local")
+    renderer = _renderer_for_pages(count=3)
+    res = _ocr_via_local(
+        b"%PDF-fake", media_type="application/pdf",
+        http_post=poster, pdf_renderer=renderer,
+        haiku_page_fallback=True,
+        haiku_caller=_fake_haiku("page 1 via haiku", cost=0.013),
+    )
+    assert "page 0 local" in res.text
+    assert "page 1 via haiku" in res.text
+    assert "page 2 local" in res.text
+    # Only one page hit Haiku, so cost = one Haiku call.
+    assert res.cost_usd == pytest.approx(0.013)
+    # Both local primary and Haiku appear in models_used; fallback doesn't because
+    # it failed on the only page that needed it.
+    assert LOCAL_PRIMARY_DEFAULT in res.model
+    assert "claude-haiku" in res.model
+
+
+def test_haiku_page_fallback_not_called_when_local_succeeds() -> None:
+    poster = FakePoster()
+    poster.add_response(LOCAL_PRIMARY_DEFAULT, "local handled it")
+    haiku_called = {"n": 0}
+    def haiku_caller(*a, **kw):
+        haiku_called["n"] += 1
+        return _fake_haiku("never used")(*a, **kw)
+    res = _ocr_via_local(
+        b"x", media_type="image/png",
+        http_post=poster,
+        haiku_page_fallback=True,
+        haiku_caller=haiku_caller,
+    )
+    assert res.text == "local handled it"
+    assert res.cost_usd == 0.0
+    assert haiku_called["n"] == 0

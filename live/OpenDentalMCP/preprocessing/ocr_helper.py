@@ -292,26 +292,38 @@ def _ocr_via_local(
     fallback_model: Optional[str] = None,
     dpi: Optional[int] = None,
     timeout: Optional[int] = None,
+    haiku_page_fallback: Optional[bool] = None,
     http_post=None,
     pdf_renderer=None,
+    haiku_caller=None,
 ) -> OcrResult:
     """OCR via an Ollama-served vision model on the LAN.
 
     For PDFs: renders each page to PNG (PyMuPDF), OCRs each page, concatenates.
     For images: sends the bytes directly.
 
-    Per-page failures retry once on the primary model, then once on the
-    fallback. If a page still fails, raises OcrError.
+    Per-page ladder:
+      1. Primary local model (e.g. glm-ocr:q8_0), attempt 1
+      2. Primary local model, retry once
+      3. Fallback local model (e.g. qwen3.5:9b), single attempt
+      4. (Optional) Claude Haiku via API, single attempt — gated by
+         LOCAL_VLM_HAIKU_PAGE_FALLBACK=true. Adds ~$0.01 per failed page
+         but rescues pages that crash both local models.
+
+    If every tier fails, raises OcrError for that page.
 
     Test seams:
-      - http_post(url, body) -> dict       lets tests mock the Ollama call
-      - pdf_renderer(bytes, dpi) -> [bytes] lets tests mock the PDF renderer
+      - http_post(url, body) -> dict       mocks the Ollama call
+      - pdf_renderer(bytes, dpi) -> [bytes] mocks the PDF renderer
+      - haiku_caller(bytes, media_type) -> OcrResult  mocks the Haiku call
     """
     base = (base_url or os.environ.get("LOCAL_VLM_BASE_URL", LOCAL_BASE_URL_DEFAULT)).rstrip("/")
     primary = primary_model or os.environ.get("LOCAL_VLM_PRIMARY", LOCAL_PRIMARY_DEFAULT)
     fallback = fallback_model or os.environ.get("LOCAL_VLM_FALLBACK", LOCAL_FALLBACK_DEFAULT)
     dpi_val = dpi or int(os.environ.get("LOCAL_VLM_DPI", str(LOCAL_DPI_DEFAULT)))
     timeout_val = timeout or int(os.environ.get("LOCAL_VLM_TIMEOUT", str(LOCAL_TIMEOUT_DEFAULT)))
+    if haiku_page_fallback is None:
+        haiku_page_fallback = os.environ.get("LOCAL_VLM_HAIKU_PAGE_FALLBACK", "false").lower() == "true"
 
     # Decide on the page list (one image -> one element).
     if media_type == "application/pdf":
@@ -331,11 +343,12 @@ def _ocr_via_local(
     parts: list[str] = []
     total_in = 0
     total_out = 0
+    page_costs: float = 0.0
     models_used: set[str] = set()
     is_unreadable_pages = 0
 
     for page_idx, page_bytes in enumerate(pages):
-        text, model_used, in_tok, out_tok = _ocr_page_with_fallback(
+        text, model_used, in_tok, out_tok, page_cost = _ocr_page_with_fallback(
             page_bytes,
             primary=primary,
             fallback=fallback,
@@ -344,10 +357,13 @@ def _ocr_via_local(
             prompt_override=prompt,
             poster=poster,
             page_idx=page_idx,
+            haiku_page_fallback=haiku_page_fallback,
+            haiku_caller=haiku_caller,
         )
         parts.append(text)
         total_in += in_tok
         total_out += out_tok
+        page_costs += page_cost
         models_used.add(model_used)
         if text.strip().upper() == "UNREADABLE":
             is_unreadable_pages += 1
@@ -359,7 +375,7 @@ def _ocr_via_local(
         model="+".join(sorted(models_used)) if models_used else primary,
         input_tokens=total_in,
         output_tokens=total_out,
-        cost_usd=0.0,  # local inference — no per-doc API cost
+        cost_usd=page_costs,  # 0 for pure-local; >0 only when Haiku page fallback engaged
         media_type=media_type,
         is_unreadable=is_unreadable,
     )
@@ -375,10 +391,15 @@ def _ocr_page_with_fallback(
     prompt_override: Optional[str],
     poster,
     page_idx: int,
-) -> tuple[str, str, int, int]:
+    haiku_page_fallback: bool = False,
+    haiku_caller=None,
+) -> tuple[str, str, int, int, float]:
     """OCR one page with retry-once on primary, then fallback to secondary.
 
-    Returns (text, model_used, input_tokens, output_tokens).
+    If both local tiers fail and `haiku_page_fallback=True`, makes one final
+    attempt via Claude Haiku for that page.
+
+    Returns (text, model_used, input_tokens, output_tokens, cost_usd).
     """
     last_err: Optional[Exception] = None
     # Primary, attempt 1 + retry.
@@ -392,7 +413,7 @@ def _ocr_page_with_fallback(
                 prompt=prompt_override or _prompt_for_model(primary),
                 poster=poster,
             )
-            return text, primary, in_tok, out_tok
+            return text, primary, in_tok, out_tok, 0.0
         except OcrError as e:
             last_err = e
             log.warning("page %d %s attempt %d failed: %s", page_idx, primary, attempt + 1, e)
@@ -408,11 +429,33 @@ def _ocr_page_with_fallback(
                 poster=poster,
             )
             log.info("page %d recovered via fallback model %s", page_idx, fallback)
-            return text, fallback, in_tok, out_tok
+            return text, fallback, in_tok, out_tok, 0.0
         except OcrError as e:
             last_err = e
             log.warning("page %d fallback %s failed: %s", page_idx, fallback, e)
-    raise OcrError(f"page {page_idx} failed on primary+fallback: {last_err!r}")
+    # Last-resort: Claude Haiku for this page only. Opt-in via env var.
+    if haiku_page_fallback:
+        try:
+            caller = haiku_caller if haiku_caller is not None else _default_haiku_page_call
+            haiku_result = caller(page_bytes, "image/png")
+            log.info("page %d recovered via Haiku page fallback (cost $%.4f)",
+                     page_idx, haiku_result.cost_usd)
+            return (haiku_result.text, haiku_result.model,
+                    haiku_result.input_tokens, haiku_result.output_tokens,
+                    haiku_result.cost_usd)
+        except OcrError as e:
+            last_err = e
+            log.warning("page %d Haiku fallback failed: %s", page_idx, e)
+    raise OcrError(f"page {page_idx} failed on primary+fallback{'+haiku' if haiku_page_fallback else ''}: {last_err!r}")
+
+
+def _default_haiku_page_call(page_bytes: bytes, media_type: str) -> OcrResult:
+    """Real Haiku call for a single page. Tests inject their own caller."""
+    return _ocr_via_haiku(
+        page_bytes,
+        media_type=media_type,
+        prompt=GENERIC_OCR_PROMPT,
+    )
 
 
 def _ollama_ocr_call(
