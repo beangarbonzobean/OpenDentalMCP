@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from mcp_tools import OpenDentalMCPTools
 from np_tracker_routes import np_tracker_bp
+from intake_routes import intake_bp
 
 # Configure logging
 logging.basicConfig(
@@ -37,6 +38,10 @@ tools = OpenDentalMCPTools()
 # New Patient Tracker blueprint — LAN-only browser dashboard. The blueprint
 # enforces RFC-1918 source-IP gating internally; see np_tracker_routes.py.
 app.register_blueprint(np_tracker_bp)
+
+# Intake Review blueprint — LAN-only review queue for batch-scan auto-filing.
+# Same RFC-1918 source-IP gate; see intake_routes.py.
+app.register_blueprint(intake_bp)
 
 
 @app.route('/health', methods=['GET'])

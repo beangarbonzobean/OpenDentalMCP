@@ -21,12 +21,13 @@ Set-Location $Root
 $apiKey = [Environment]::GetEnvironmentVariable('ANTHROPIC_API_KEY', 'Machine')
 
 $env:MCP_CONFIG_FILE              = 'config.prod.json'
-# Watch folder — UPDATE THIS ONCE SCANNER IS WIRED UP TO A SHARE LOCATION.
-# Defaults to a local-disk path until the share folder is configured.
-$env:INTAKE_WATCH_FOLDER          = $env:INTAKE_WATCH_FOLDER ?? (Join-Path $Root 'data\intake_pending')
-# Auto-file threshold. 0.95 is conservative; lower it after a few days of
-# real-data confirmation in the queue UI.
-$env:INTAKE_AUTO_FILE_THRESHOLD   = $env:INTAKE_AUTO_FILE_THRESHOLD ?? '0.95'
+# Watch folder: scanner dumps end-of-day batch PDFs here.
+$env:INTAKE_WATCH_FOLDER          = $env:INTAKE_WATCH_FOLDER ?? '\\SERVER12\ShareFolder\Scans'
+# SHADOW MODE: threshold > 1.0 means nothing ever auto-files. Every candidate
+# is queued for review so we can compare our suggestions against what front
+# desk actually filed during the day. Lower this (e.g. to 0.95) once we've
+# seen the AI agree with staff for several days running.
+$env:INTAKE_AUTO_FILE_THRESHOLD   = $env:INTAKE_AUTO_FILE_THRESHOLD ?? '1.5'
 
 # Use the local VLM for the OCR step (free) and Haiku for the structured
 # extraction + classification (more accurate for JSON output).
