@@ -250,6 +250,7 @@ def _process_one_pdf(
             and match.pat_num is not None
             and upload_fn is not None
         ):
+            disconnect = os.environ.get("INTAKE_DISCONNECT_OD", "false").lower() == "true"
             file_res = filer_mod.file_document(
                 source_pdf_bytes=pdf_bytes,
                 page_indices=cand.page_indices,
@@ -258,23 +259,26 @@ def _process_one_pdf(
                 description=f"Auto-filed from intake (confidence={overall:.2f})",
                 file_name_hint=_filename_from_candidate(cand, cls.category),
                 od_uploader=upload_fn,
+                disconnect=disconnect,
             )
             if file_res.success:
+                final_status = "simulated_filed" if file_res.simulated else "auto_filed"
                 ic.update_pending_status(
                     conn, pending_id,
-                    status="auto_filed",
+                    status=final_status,
                     target_doc_num=file_res.doc_num,
                     target_file_path=file_res.file_path,
                     decided_by="auto-file",
                 )
                 ic.write_audit(conn, ic.IntakeAudit(
-                    pending_id=pending_id, action="auto_filed", actor="auto-file",
+                    pending_id=pending_id, action=final_status, actor="auto-file",
                     details={
                         "doc_num": file_res.doc_num,
                         "file_path": file_res.file_path,
                         "pat_num": match.pat_num,
                         "def_num": cls.category.def_num,
                         "overall_confidence": overall,
+                        "simulated": file_res.simulated,
                     },
                 ))
                 result.candidates_auto_filed += 1

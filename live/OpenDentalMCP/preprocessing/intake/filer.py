@@ -47,6 +47,7 @@ class FileResult:
     file_name: Optional[str] = None
     file_path: Optional[str] = None  # If OD returns one
     error: Optional[str] = None
+    simulated: bool = False  # True if disconnect mode — nothing was actually filed
 
 
 def file_document(
@@ -58,6 +59,7 @@ def file_document(
     description: str = "",
     file_name_hint: Optional[str] = None,
     od_uploader: Callable[[dict], Any],
+    disconnect: bool = False,
 ) -> FileResult:
     """File one document into OD.
 
@@ -67,6 +69,12 @@ def file_document(
       3. Base64-encode the bytes.
       4. Call od_uploader with the OD POST /documents payload.
       5. Parse the response and return a FileResult.
+
+    `disconnect=True` short-circuits step 4: the function still validates,
+    extracts pages, and computes the filename, but never invokes
+    `od_uploader`. Returns a FileResult with `simulated=True`. Used for
+    shadow-mode operation where we want to record what we WOULD have filed
+    without actually mutating OD.
 
     The function never raises. Errors are returned in FileResult.error.
     """
@@ -104,6 +112,20 @@ def file_document(
         "description": description or "",
         "category": def_num_i,
     }
+
+    # Disconnect mode: skip the actual upload but report success so the row
+    # transitions to simulated_filed and downstream comparison logic can see
+    # what we'd have filed.
+    if disconnect:
+        log.info(
+            "filer: SIMULATED upload pat=%d def=%d pages=%s file=%s bytes=%d (disconnect mode)",
+            pat_num_i, def_num_i, page_indices, fname, len(out_pdf),
+        )
+        return FileResult(
+            success=True, doc_num=None, file_name=fname,
+            file_path=None, simulated=True,
+        )
+
     log.info(
         "filer: uploading to OD pat=%d def=%d pages=%s file=%s bytes=%d",
         pat_num_i, def_num_i, page_indices, fname, len(out_pdf),

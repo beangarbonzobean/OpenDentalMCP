@@ -266,3 +266,70 @@ def test_make_file_name_default_format() -> None:
     out = fl._make_file_name(None, 42)
     assert out.startswith("INTAKE_42_")
     assert out.endswith(".pdf")
+
+
+# ---------------------------------------------------------------------------
+# Disconnect mode (shadow-mode)
+# ---------------------------------------------------------------------------
+
+def test_disconnect_mode_returns_simulated_no_uploader_call() -> None:
+    pdf = _make_pdf(2)
+    upload_calls: list = []
+
+    def uploader(payload):
+        upload_calls.append(payload)
+        return {"DocNum": 99}
+
+    res = fl.file_document(
+        source_pdf_bytes=pdf, page_indices=[0],
+        pat_num=42, def_num=455,
+        od_uploader=uploader, disconnect=True,
+    )
+    assert res.success is True
+    assert res.simulated is True
+    assert res.doc_num is None
+    assert res.file_name and res.file_name.endswith(".pdf")
+    # Crucially: the OD uploader was NEVER called.
+    assert upload_calls == []
+
+
+def test_disconnect_default_is_false() -> None:
+    """Calling without `disconnect=` keyword preserves real-OD behavior."""
+    pdf = _make_pdf(1)
+    uploader = _capture_uploader()
+    res = fl.file_document(
+        source_pdf_bytes=pdf, page_indices=[0],
+        pat_num=42, def_num=455,
+        od_uploader=uploader,  # no disconnect kwarg
+    )
+    assert res.success is True
+    assert res.simulated is False
+    assert res.doc_num == 99999
+    assert len(uploader.captured) == 1  # type: ignore[attr-defined]
+
+
+def test_disconnect_still_validates_inputs() -> None:
+    """Even in disconnect mode, bad inputs should fail before the synthetic success."""
+    res = fl.file_document(
+        source_pdf_bytes=b"", page_indices=[0],
+        pat_num=42, def_num=455,
+        od_uploader=lambda p: None, disconnect=True,
+    )
+    assert res.success is False
+    assert res.simulated is False
+    assert res.error == "source_pdf_empty"
+
+
+def test_disconnect_still_extracts_pages_and_builds_filename() -> None:
+    """Validation work (page extraction, filename) still happens even when
+    disconnected — that's part of the audit trail."""
+    pdf = _make_pdf(5)
+    res = fl.file_document(
+        source_pdf_bytes=pdf, page_indices=[1, 2, 3],
+        pat_num=42, def_num=465,
+        file_name_hint="route_slip_test",
+        od_uploader=lambda p: None, disconnect=True,
+    )
+    assert res.success is True
+    assert res.simulated is True
+    assert res.file_name and "route_slip_test" in res.file_name

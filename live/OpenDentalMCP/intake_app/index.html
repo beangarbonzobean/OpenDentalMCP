@@ -103,6 +103,13 @@
   .badge.pending { background: #fef0e1; color: var(--warn); }
   .badge.queued  { background: #e6efff; color: var(--accent); }
   .badge.error   { background: #fde7e7; color: var(--bad); }
+  .badge.simulated_filed { background: #fff4d4; color: #7a5e00; }
+  .banner-disconnect {
+    background: #fff4d4; border-bottom: 2px solid #d4a300; color: #5a4400;
+    padding: 8px 18px; font-size: 13px; display: flex;
+    align-items: center; gap: 10px;
+  }
+  .banner-disconnect strong { color: #7a5e00; }
 </style>
 </head>
 <body>
@@ -114,6 +121,12 @@
     <button id="refresh">Refresh</button>
   </div>
 </header>
+<div id="banner-disconnect" class="banner-disconnect" hidden>
+  <strong>SHADOW MODE — disconnected from Open Dental.</strong>
+  Confirm and Override clicks are recorded for accuracy comparison but
+  <strong>nothing is filed into OD</strong>. To enable real filing, unset
+  <code>INTAKE_DISCONNECT_OD</code> on the server and restart.
+</div>
 
 <main>
   <section class="queue">
@@ -185,9 +198,22 @@ const confClass = (v) => {
   return "low";
 };
 let categories = [];
+let appConfig = { disconnect_od: false };
 let currentItem = null;
 let patientSearchTimer = null;
 let chosenPatNum = null;
+
+async function loadConfig() {
+  try {
+    const r = await fetch("/intake/api/config");
+    if (r.ok) {
+      appConfig = await r.json();
+      $("#banner-disconnect").hidden = !appConfig.disconnect_od;
+    }
+  } catch (e) {
+    // Non-fatal — banner just won't show.
+  }
+}
 
 async function loadCategories() {
   const r = await fetch("/intake/api/categories");
@@ -345,7 +371,10 @@ async function runPatientSearch(input, resultsEl) {
 }
 
 async function doConfirm(id) {
-  if (!confirm("File this document into OD with the suggested patient and category?")) return;
+  const promptText = appConfig.disconnect_od
+    ? "Record this filing for accuracy comparison? (Disconnected mode — nothing will actually be sent to OD.)"
+    : "File this document into OD with the suggested patient and category?";
+  if (!confirm(promptText)) return;
   setButtonsDisabled(true);
   try {
     const r = await fetch(`/intake/api/item/${id}/confirm`, {
@@ -354,7 +383,9 @@ async function doConfirm(id) {
     });
     const data = await r.json();
     if (!r.ok || !data.ok) throw new Error(data.error || `HTTP ${r.status}`);
-    toast(`Filed as DocNum ${data.doc_num}`);
+    toast(data.simulated
+      ? `Recorded (simulated — not sent to OD).`
+      : `Filed as DocNum ${data.doc_num}`);
     await loadQueue();
     showEmptyDetail();
   } catch (e) {
@@ -371,7 +402,10 @@ async function doOverride(id, catSelect) {
     toast("Pick a patient first.", true);
     return;
   }
-  if (!confirm(`File with patient #${pat_num} and category ${catSelect.options[catSelect.selectedIndex].text}?`)) return;
+  const action = appConfig.disconnect_od
+    ? `Record patient #${pat_num} + category ${catSelect.options[catSelect.selectedIndex].text}? (Disconnected mode.)`
+    : `File with patient #${pat_num} and category ${catSelect.options[catSelect.selectedIndex].text}?`;
+  if (!confirm(action)) return;
   setButtonsDisabled(true);
   try {
     const r = await fetch(`/intake/api/item/${id}/override`, {
@@ -383,7 +417,9 @@ async function doOverride(id, catSelect) {
     });
     const data = await r.json();
     if (!r.ok || !data.ok) throw new Error(data.error || `HTTP ${r.status}`);
-    toast(`Filed (overridden) as DocNum ${data.doc_num}`);
+    toast(data.simulated
+      ? `Override recorded (simulated — not sent to OD).`
+      : `Filed (overridden) as DocNum ${data.doc_num}`);
     await loadQueue();
     showEmptyDetail();
   } catch (e) {
@@ -445,6 +481,7 @@ $("#refresh").addEventListener("click", loadQueue);
 $("#status-filter").addEventListener("change", loadQueue);
 
 (async () => {
+  await loadConfig();
   await loadCategories();
   await loadQueue();
 })();

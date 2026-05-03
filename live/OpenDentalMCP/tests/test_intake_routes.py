@@ -399,3 +399,85 @@ def test_reject_409_when_not_in_open_status(client, app) -> None:
     pid = _seed_pending(app.config["_cache_db"], app.config["_pdf_path"], status="filed")
     r = client.post(f"/intake/api/item/{pid}/reject", json={})
     assert r.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# /intake/api/config + disconnect mode
+# ---------------------------------------------------------------------------
+
+def test_config_endpoint_default_not_disconnected(client, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("INTAKE_DISCONNECT_OD", raising=False)
+    r = client.get("/intake/api/config")
+    assert r.status_code == 200
+    data = r.get_json()
+    assert data["disconnect_od"] is False
+    assert "auto_file_threshold" in data
+    assert "watch_folder" in data
+
+
+def test_config_endpoint_reflects_env(client, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("INTAKE_DISCONNECT_OD", "true")
+    r = client.get("/intake/api/config")
+    assert r.get_json()["disconnect_od"] is True
+
+
+def test_confirm_in_disconnect_mode_sets_simulated_filed(
+    client, app, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("INTAKE_DISCONNECT_OD", "true")
+    pid = _seed_pending(app.config["_cache_db"], app.config["_pdf_path"], status="queued")
+    r = client.post(f"/intake/api/item/{pid}/confirm", json={"actor": "Ben"})
+    assert r.status_code == 200
+    data = r.get_json()
+    assert data["ok"] is True
+    assert data["simulated"] is True
+    assert data["status"] == "simulated_filed"
+    assert data["doc_num"] is None
+
+    # The OD uploader was NOT called.
+    assert len(FakeOpenDentalMCPTools.upload_calls) == 0
+
+    with ic.open_cache(app.config["_cache_db"]) as conn:
+        row = ic.get_pending(conn, pid)
+        assert row.status == "simulated_filed"
+        assert row.target_doc_num is None
+        assert row.decided_by == "staff:Ben"
+
+
+def test_override_in_disconnect_mode_records_simulated(
+    client, app, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("INTAKE_DISCONNECT_OD", "true")
+    pid = _seed_pending(app.config["_cache_db"], app.config["_pdf_path"],
+                        status="queued", pat_num=100, def_num=461)
+    r = client.post(f"/intake/api/item/{pid}/override",
+                    json={"pat_num": 555, "def_num": tx.ROUTE_SLIP.def_num,
+                          "actor": "Ben"})
+    assert r.status_code == 200
+    data = r.get_json()
+    assert data["simulated"] is True
+    assert data["status"] == "simulated_filed"
+    assert len(FakeOpenDentalMCPTools.upload_calls) == 0
+
+    with ic.open_cache(app.config["_cache_db"]) as conn:
+        row = ic.get_pending(conn, pid)
+        # Even though we didn't actually file, we record what we WOULD have:
+        # the chosen patient + category persist for accuracy comparison later.
+        assert row.suggested_pat_num == 555
+        assert row.suggested_def_num == tx.ROUTE_SLIP.def_num
+        assert row.status == "simulated_filed"
+
+
+def test_confirm_normal_mode_still_files_for_real(
+    client, app, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Confirm with disconnect off should still hit the real OD uploader."""
+    monkeypatch.delenv("INTAKE_DISCONNECT_OD", raising=False)
+    pid = _seed_pending(app.config["_cache_db"], app.config["_pdf_path"], status="queued")
+    r = client.post(f"/intake/api/item/{pid}/confirm", json={})
+    assert r.status_code == 200
+    data = r.get_json()
+    assert data["simulated"] is False
+    assert data["status"] == "filed"
+    assert data["doc_num"] == 99999
+    assert len(FakeOpenDentalMCPTools.upload_calls) == 1

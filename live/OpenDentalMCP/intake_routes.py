@@ -124,6 +124,24 @@ def api_categories():
     ])
 
 
+@intake_bp.get("/api/config")
+def api_config():
+    """Read-only config flags the UI uses to render banners + behavior hints."""
+    return jsonify({
+        "disconnect_od": _disconnect_od_enabled(),
+        "auto_file_threshold": float(
+            os.environ.get("INTAKE_AUTO_FILE_THRESHOLD", "0.95")
+        ),
+        "watch_folder": os.environ.get(
+            "INTAKE_WATCH_FOLDER", r"\\SERVER12\ShareFolder\Scans"
+        ),
+    })
+
+
+def _disconnect_od_enabled() -> bool:
+    return os.environ.get("INTAKE_DISCONNECT_OD", "false").lower() == "true"
+
+
 @intake_bp.get("/api/queue")
 def api_queue():
     """List items by status. Defaults to queued+pending+error."""
@@ -311,16 +329,18 @@ def _file_item(
         is_override = (
             override_pat_num is not None or override_def_num is not None
         )
-        action_label = "overridden" if is_override else "filed"
+        intended_action = "overridden" if is_override else "filed"
+        disconnect = _disconnect_od_enabled()
 
         result = filer_mod.file_document(
             source_pdf_bytes=src_bytes,
             page_indices=row.page_indices,
             pat_num=pat_num,
             def_num=def_num,
-            description=f"Filed via review UI ({action_label})",
+            description=f"Filed via review UI ({intended_action})",
             file_name_hint=_filename_for(row, def_num),
             od_uploader=tools._upload_document,
+            disconnect=disconnect,
         )
         if not result.success:
             ic.update_pending_status(
@@ -329,13 +349,19 @@ def _file_item(
             )
             ic.write_audit(conn, ic.IntakeAudit(
                 pending_id=pending_id, action="error", actor=f"staff:{actor}",
-                details={"error": result.error, "intended_action": action_label},
+                details={"error": result.error, "intended_action": intended_action},
             ))
             return jsonify({"ok": False, "error": result.error}), 502
 
+        # Status reflects what really happened. In disconnect mode, no OD write
+        # occurred — record as `simulated_filed` so audit / accuracy comparison
+        # can distinguish from real filings.
+        final_status = "simulated_filed" if result.simulated else intended_action
+        audit_action = "simulated_filed" if result.simulated else intended_action
+
         ic.update_pending_status(
             conn, pending_id,
-            status=action_label,
+            status=final_status,
             target_doc_num=result.doc_num,
             target_file_path=result.file_path,
             suggested_pat_num=pat_num,
@@ -343,7 +369,7 @@ def _file_item(
             decided_by=f"staff:{actor}",
         )
         ic.write_audit(conn, ic.IntakeAudit(
-            pending_id=pending_id, action=action_label, actor=f"staff:{actor}",
+            pending_id=pending_id, action=audit_action, actor=f"staff:{actor}",
             details={
                 "doc_num": result.doc_num,
                 "file_path": result.file_path,
@@ -351,12 +377,15 @@ def _file_item(
                 "def_num": def_num,
                 "override_pat_num": override_pat_num,
                 "override_def_num": override_def_num,
+                "intended_action": intended_action,
+                "simulated": result.simulated,
             },
         ))
 
     return jsonify({
         "ok": True,
-        "status": action_label,
+        "status": final_status,
+        "simulated": result.simulated,
         "doc_num": result.doc_num,
         "file_path": result.file_path,
     })

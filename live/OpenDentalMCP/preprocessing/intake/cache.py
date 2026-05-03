@@ -35,13 +35,14 @@ DEFAULT_INTAKE_DB = Path(__file__).resolve().parent.parent.parent / "data" / "in
 
 
 VALID_STATUS = {
-    "pending",        # extracted, not yet decided
-    "queued",         # awaiting staff confirmation
-    "auto_filed",     # auto-filed without staff intervention
-    "filed",          # staff-confirmed and filed
-    "overridden",     # staff fixed and filed
-    "rejected",       # staff rejected; file moved to quarantine
-    "error",          # processing failed; needs investigation
+    "pending",          # extracted, not yet decided
+    "queued",           # awaiting staff confirmation
+    "auto_filed",       # auto-filed without staff intervention
+    "filed",            # staff-confirmed and filed
+    "overridden",       # staff fixed and filed
+    "simulated_filed",  # disconnect mode: would-have-filed but not actually uploaded
+    "rejected",         # staff rejected; file moved to quarantine
+    "error",            # processing failed; needs investigation
 }
 
 
