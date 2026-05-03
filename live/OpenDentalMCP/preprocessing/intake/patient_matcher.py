@@ -105,9 +105,13 @@ def match_patient(
     seen_pat_nums: set[int] = set()
 
     for last, first in candidates:
-        params: dict = {"LName": last}
+        # NOTE: tools._search_patients reads `last_name` / `first_name`
+        # (snake_case) and translates them to OD's `LName`/`FName`. Calling
+        # with the CamelCase keys gets silently dropped and OD returns ALL
+        # patients. Always use snake_case here.
+        params: dict = {"last_name": last}
         if first:
-            params["FName"] = first
+            params["first_name"] = first
         try:
             raw = search_patients(params)
         except Exception as e:
@@ -120,6 +124,11 @@ def match_patient(
             except (TypeError, ValueError):
                 continue
             if pn in seen_pat_nums:
+                continue
+            # Defensive: require the returned row's name to actually match
+            # the search terms (case-insensitive). Even if the API silently
+            # drops a filter, the matcher won't surface an unrelated patient.
+            if not _row_name_matches(r, last, first):
                 continue
             seen_pat_nums.add(pn)
             seen.append(r)
@@ -266,3 +275,31 @@ def _format_label(row: dict) -> str:
     first = (row.get("FName") or "").strip()
     pat_num = row.get("PatNum")
     return f"{last}, {first} ({pat_num})"
+
+
+def _row_name_matches(row: dict, want_last: str, want_first: str) -> bool:
+    """Defensive: confirm the returned OD row matches the name we asked for.
+
+    Compares case-insensitive on the LName as a starts-with, and (if a first
+    name was supplied) requires the FName to also start with the requested
+    first. Whitespace is stripped because OD allows leading/trailing spaces
+    in the name fields ("' Sabou '").
+
+    This protects against a buggy API response that returns more rows than
+    requested — without it, an unfiltered all-patients dump would surface
+    arbitrary patients as "matches".
+    """
+    row_last = (row.get("LName") or "").strip().lower()
+    row_first = (row.get("FName") or "").strip().lower()
+    want_last_l = (want_last or "").strip().lower()
+    want_first_l = (want_first or "").strip().lower()
+    if not want_last_l:
+        return False
+    # Surname: case-insensitive equality (or starts-with for partial matches)
+    if row_last != want_last_l and not row_last.startswith(want_last_l):
+        return False
+    # First name: only enforce if we asked for one
+    if want_first_l:
+        if row_first != want_first_l and not row_first.startswith(want_first_l):
+            return False
+    return True

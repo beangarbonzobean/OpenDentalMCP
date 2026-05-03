@@ -264,7 +264,7 @@ def test_three_patients_in_one_pdf(watch: Path, cache_path: Path) -> None:
     }
 
     def search(params):
-        last = (params.get("LName") or "").lower()
+        last = (params.get("last_name") or "").lower()
         return pat_lookup.get(last, [])
 
     res = pr.process_watch_folder(

@@ -22,12 +22,12 @@ $apiKey = [Environment]::GetEnvironmentVariable('ANTHROPIC_API_KEY', 'Machine')
 
 $env:MCP_CONFIG_FILE              = 'config.prod.json'
 # Watch folder: scanner dumps end-of-day batch PDFs here.
-$env:INTAKE_WATCH_FOLDER          = $env:INTAKE_WATCH_FOLDER ?? '\\SERVER12\ShareFolder\Scans'
+if (-not $env:INTAKE_WATCH_FOLDER)        { $env:INTAKE_WATCH_FOLDER        = '\\SERVER12\ShareFolder\Scans' }
 # SHADOW MODE: threshold > 1.0 means nothing ever auto-files. Every candidate
 # is queued for review so we can compare our suggestions against what front
 # desk actually filed during the day. Lower this (e.g. to 0.95) once we've
 # seen the AI agree with staff for several days running.
-$env:INTAKE_AUTO_FILE_THRESHOLD   = $env:INTAKE_AUTO_FILE_THRESHOLD ?? '1.5'
+if (-not $env:INTAKE_AUTO_FILE_THRESHOLD) { $env:INTAKE_AUTO_FILE_THRESHOLD = '1.5' }
 
 # Use the local VLM for the OCR step (free) and Haiku for the structured
 # extraction + classification (more accurate for JSON output).

@@ -192,13 +192,17 @@ def api_patient_search():
     tools = _get_tools_instance()
     if tools is None:
         return jsonify({"error": "OpenDental tools unavailable"}), 503
+    # tools._search_patients translates snake_case input keys
+    # (last_name/first_name/birthdate) to OD's CamelCase. Calling with
+    # the CamelCase keys directly silently drops the filter and OD
+    # returns all 1000 patients.
     params: dict = {}
     if request.args.get("lname"):
-        params["LName"] = request.args["lname"].strip()
+        params["last_name"] = request.args["lname"].strip()
     if request.args.get("fname"):
-        params["FName"] = request.args["fname"].strip()
+        params["first_name"] = request.args["fname"].strip()
     if request.args.get("dob"):
-        params["Birthdate"] = request.args["dob"].strip()
+        params["birthdate"] = request.args["dob"].strip()
     if not params:
         return jsonify({"error": "at least one of lname / fname / dob required"}), 400
     try:

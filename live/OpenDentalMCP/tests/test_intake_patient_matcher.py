@@ -10,13 +10,20 @@ from preprocessing.intake import patient_matcher as pm
 
 
 def _factory(by_params: dict[tuple[str, str | None], list[dict]]):
-    """Build a fake search_patients that responds based on (LName, FName)."""
+    """Build a fake search_patients that responds based on (last_name, first_name).
+
+    Mirrors tools._search_patients: input keys are snake_case (last_name,
+    first_name). The fake routes by (last_name, first_name) into a canned
+    response set.
+    """
     seen: list[dict] = []
 
     def call(params: dict) -> list[dict]:
         seen.append(params)
-        key = (params.get("LName", "").lower(), (params.get("FName") or "").lower() or None)
-        # Match flexibly: also try (LName, None) if exact key missing
+        key = (
+            params.get("last_name", "").lower(),
+            (params.get("first_name") or "").lower() or None,
+        )
         if key in by_params:
             return by_params[key]
         for k in by_params:
@@ -254,3 +261,86 @@ def test_od_birthdate_with_time_suffix_parses() -> None:
     assert pm._normalize_od_birthdate(None) is None
     assert pm._normalize_od_birthdate("") is None
     assert pm._normalize_od_birthdate("not a date") is None
+
+
+# ---------------------------------------------------------------------------
+# Defensive name-match: don't trust the API to filter
+# ---------------------------------------------------------------------------
+
+def test_uses_snake_case_param_keys() -> None:
+    """tools._search_patients reads `last_name` / `first_name`, not `LName`/`FName`.
+    Passing CamelCase causes the API to silently return all patients.
+    Confirm matcher is calling with the right keys."""
+    captured: list[dict] = []
+
+    def search(params: dict) -> list[dict]:
+        captured.append(dict(params))
+        return [{"PatNum": 101, "LName": "Smith", "FName": "Jane",
+                 "Birthdate": "1980-04-12T00:00:00"}]
+
+    pm.match_patient("Smith, Jane", "1980-04-12", search_patients=search)
+    assert captured  # at least one call
+    for params in captured:
+        assert "last_name" in params, f"matcher called with wrong key: {params}"
+        assert "LName" not in params, f"matcher used CamelCase: {params}"
+
+
+def test_unrelated_returned_rows_are_filtered_out() -> None:
+    """If the API misbehaves and returns rows not matching the search name,
+    the matcher must NOT surface them as a patient. Reproduces the prod
+    bug where _search_patients returned all 1000 patients regardless of
+    the name filter."""
+    def evil_search(params: dict) -> list[dict]:
+        # API returns rows for completely different patients
+        return [
+            {"PatNum": 2, "LName": "ABBACIA", "FName": "YVETTE",
+             "Birthdate": "1985-01-01T00:00:00"},
+            {"PatNum": 22549, "LName": " Sabou ", "FName": "Bori ",
+             "Birthdate": "1981-01-27T00:00:00"},
+            {"PatNum": 13662, "LName": ".WEATHERLY", "FName": "STAN",
+             "Birthdate": "1950-08-06T00:00:00"},
+        ]
+
+    res = pm.match_patient("Hawkins, Lynn", None, search_patients=evil_search)
+    assert res.pat_num is None
+    assert res.confidence == 0.0
+    assert res.reason == "no_od_match"
+
+
+def test_starts_with_match_accepted() -> None:
+    """OD's search may surface partial-prefix rows; matcher accepts those if
+    the prefix matches what we asked for."""
+    def search(params: dict) -> list[dict]:
+        return [{"PatNum": 101, "LName": "Smithson", "FName": "Janet",
+                 "Birthdate": "1980-04-12T00:00:00"}]
+
+    res = pm.match_patient("Smith, Jane", "1980-04-12", search_patients=search)
+    # Smithson starts with Smith, Janet starts with Jane — accepted
+    assert res.pat_num == 101
+
+
+def test_exact_lname_with_unrelated_fname_rejected() -> None:
+    """If LName matches but FName clearly doesn't, the row should be rejected
+    by the defensive check."""
+    def search(params: dict) -> list[dict]:
+        return [{"PatNum": 999, "LName": "Smith", "FName": "Bob",
+                 "Birthdate": "1970-01-01T00:00:00"}]
+
+    res = pm.match_patient("Smith, Jane", None, search_patients=search)
+    assert res.pat_num is None
+    assert res.confidence == 0.0
+
+
+def test_row_name_matches_helper() -> None:
+    rm = pm._row_name_matches
+    assert rm({"LName": "Smith", "FName": "Jane"}, "Smith", "Jane") is True
+    assert rm({"LName": "smith", "FName": "jane"}, "Smith", "Jane") is True   # case-insens
+    assert rm({"LName": " Smith ", "FName": " Jane "}, "Smith", "Jane") is True  # whitespace
+    assert rm({"LName": "Smithson", "FName": "Janet"}, "Smith", "Jane") is True  # prefix
+    assert rm({"LName": "Smith", "FName": "Janet"}, "Smith", "Jane") is True   # prefix
+    assert rm({"LName": "Smith", "FName": "Bob"}, "Smith", "Jane") is False  # fname diff
+    assert rm({"LName": "Doe", "FName": "Jane"}, "Smith", "Jane") is False   # lname diff
+    assert rm({"LName": "ABBACIA", "FName": "YVETTE"}, "Hawkins", "Lynn") is False
+    # No FName supplied: only LName matters
+    assert rm({"LName": "Smith", "FName": "anything"}, "Smith", "") is True
+    assert rm({"LName": "Doe", "FName": "Smith"}, "Smith", "") is False
