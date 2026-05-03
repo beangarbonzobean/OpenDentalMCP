@@ -106,6 +106,85 @@ REFERRALS = IntakeCategory(
     ),
 )
 
+ROUTE_SLIP = IntakeCategory(
+    def_num=465,
+    od_name="Route Slips",
+    short_label="route_slip",
+    description=(
+        "Daily route slip / appointment routing form. Has patient name + "
+        "date at the top, doctor's handwritten name/initials, list of "
+        "procedures performed today (CompEx, ProphyAd, BWX, etc.), tooth "
+        "chart annotations, and 'NV:' (next visit) field. Usually a "
+        "single page, often pre-printed practice form. Title commonly "
+        "'Routing Slip', 'Route Slip', or just 'Routing'."
+    ),
+)
+
+TREATMENT_PLAN = IntakeCategory(
+    def_num=133,
+    od_name="Treatment Plans",
+    short_label="treatment_plan",
+    description=(
+        "Printed treatment plan for patient signature. Lists procedures "
+        "with tooth numbers, ADA D-codes (D1110, D2393, etc.), surfaces, "
+        "fees, insurance estimates, and patient portion. Often labeled "
+        "'Treatment Plan', 'Active Treatment Plan', or 'Estimate'. Usually "
+        "ends with a patient signature line."
+    ),
+)
+
+LAB_SLIP = IntakeCategory(
+    def_num=330,
+    od_name="Lab Slips",
+    short_label="lab_slip",
+    description=(
+        "Lab work order or lab return slip. References a dental lab "
+        "(crowns, dentures, retainers, night guards, etc.) by name + due "
+        "date + shade + tooth number. Returned slips often include the "
+        "case completion date and lab signature. Usually a half-page form."
+    ),
+)
+
+BILLING_STATEMENT = IntakeCategory(
+    def_num=454,
+    od_name="Billing Statements",
+    short_label="billing_statement",
+    description=(
+        "Patient billing statement / invoice. Shows account balance, aging, "
+        "payment due, and a remit-to address. Often titled 'Statement' or "
+        "'Invoice' with the practice's billing address at the top and the "
+        "patient's mailing address as the addressee."
+    ),
+)
+
+EOB = IntakeCategory(
+    def_num=456,
+    od_name="EOB's",
+    short_label="eob",
+    description=(
+        "Explanation of Benefits printout from an insurance company "
+        "(Delta Dental, MetLife, Cigna, etc.). Lists procedures with "
+        "billed amount, allowed amount, deductible applied, insurance "
+        "paid, and patient portion. Usually labeled 'Explanation of "
+        "Benefits', 'EOB', 'Benefits Statement', or similar. Distinct "
+        "from insurance ELIGIBILITY (which is a benefits-summary printout, "
+        "not a per-claim payment record)."
+    ),
+)
+
+CLAIM_ATTACHMENT = IntakeCategory(
+    def_num=332,
+    od_name="Claim Attachments",
+    short_label="claim_attachment",
+    description=(
+        "Documentation submitted with an insurance claim — usually "
+        "x-ray printouts, narrative letters, periodontal charting, or "
+        "photos to justify a procedure. Often headed with the claim "
+        "number and patient. Distinct from insurance eligibility, EOBs, "
+        "and treatment plans."
+    ),
+)
+
 MISCELLANEOUS = IntakeCategory(
     def_num=137,
     od_name="Miscellaneous",
@@ -126,6 +205,12 @@ ALL_CATEGORIES: tuple[IntakeCategory, ...] = (
     PATIENT_INSURANCE,
     INSURANCE_ELIGIBILITY,
     REFERRALS,
+    ROUTE_SLIP,
+    TREATMENT_PLAN,
+    LAB_SLIP,
+    BILLING_STATEMENT,
+    EOB,
+    CLAIM_ATTACHMENT,
     MISCELLANEOUS,
 )
 
