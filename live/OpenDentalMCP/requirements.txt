@@ -9,6 +9,7 @@ pypdf>=6.0
 
 # Preprocessing layer (document_text_index)
 portalocker>=2.0
+pymupdf>=1.27  # PDF -> PNG rendering for the local VLM OCR backend
 
 # Test / dev
 pytest>=8.0

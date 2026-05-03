@@ -1,20 +1,33 @@
 """
-Claude vision wrapper for OCR'ing dental practice documents.
+OCR backend dispatch for dental practice documents.
 
-Self-contained — does not depend on the untracked route_slip_ocr.py. The two
-should be unified later by porting route_slip_ocr.py to call this module.
+Two backends:
 
-Returns a structured OcrResult so callers know whether the API ran, what model
-ran, and a rough cost estimate (used by the budget guardrail in
-document_text_index.backfill).
+- `haiku` (default): Claude Haiku 4.5 vision via the Anthropic API. Sends
+  PDFs natively as `document` blocks. ~$0.01/doc, ~12s/doc, highest quality.
+
+- `local`: Ollama-served vision model on a LAN host. Renders PDFs to PNG
+  pages first (via preprocessing.pdf_render), OCRs each page, concatenates.
+  $0/doc, ~2-5s/doc per page, quality varies by model.
+
+Selection is via the `OCR_BACKEND` env var: `haiku` (default), `local`,
+or `auto` (try local, fall back to haiku on per-doc OcrError).
+
+The local backend uses two models in a primary/fallback ladder controlled
+by `LOCAL_VLM_PRIMARY` (default `glm-ocr:q8_0`) and `LOCAL_VLM_FALLBACK`
+(default `qwen3.5:9b`). On a 5xx from primary, the helper retries once,
+then falls back to secondary.
 """
 
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import os
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from typing import Optional
 
@@ -27,7 +40,6 @@ log = logging.getLogger(__name__)
 # Last verified: 2025-10. Update if prices change.
 # Input:  $1 / 1M tokens
 # Output: $5 / 1M tokens
-# Image tokenization is approximate; we use a conservative per-MP estimate.
 HAIKU_INPUT_USD_PER_TOKEN = 1.00 / 1_000_000
 HAIKU_OUTPUT_USD_PER_TOKEN = 5.00 / 1_000_000
 
@@ -42,6 +54,36 @@ GENERIC_OCR_PROMPT = (
     "If the document is illegible, blank, or contains no text, respond with the single word UNREADABLE "
     "and nothing else."
 )
+
+
+# ---------------------------------------------------------------------------
+# Local backend defaults
+# ---------------------------------------------------------------------------
+
+LOCAL_BASE_URL_DEFAULT = "http://localhost:11434"
+LOCAL_PRIMARY_DEFAULT = "glm-ocr:q8_0"
+LOCAL_FALLBACK_DEFAULT = "qwen3.5:9b"
+LOCAL_DPI_DEFAULT = 150
+LOCAL_TIMEOUT_DEFAULT = 600  # seconds per page
+
+# Model-specific prompts. GLM-OCR was trained with a "Text Recognition:"
+# convention; general VLMs need a more verbose instruction.
+_PROMPT_BY_MODEL_PREFIX = {
+    "glm-ocr": "Text Recognition:",
+}
+_PROMPT_GENERIC_LOCAL = (
+    "Transcribe all text visible in this image. Output plain text only — "
+    "do not add commentary or summarize. Preserve line breaks where they "
+    "help represent the form layout. If the image is blank or illegible, "
+    "respond with the single word UNREADABLE and nothing else."
+)
+
+
+def _prompt_for_model(model: str) -> str:
+    for prefix, prompt in _PROMPT_BY_MODEL_PREFIX.items():
+        if model.startswith(prefix):
+            return prompt
+    return _PROMPT_GENERIC_LOCAL
 
 
 @dataclass
@@ -79,6 +121,60 @@ def ocr_bytes(
     file_bytes: bytes,
     *,
     media_type: str,
+    prompt: Optional[str] = None,
+    model: Optional[str] = None,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    max_retries: int = 3,
+    initial_backoff_seconds: float = 2.0,
+    client_factory=None,
+    backend: Optional[str] = None,
+) -> OcrResult:
+    """Dispatch to the configured OCR backend.
+
+    Backend selection (in order of precedence):
+      1. The `backend` keyword argument (mostly for tests).
+      2. The `OCR_BACKEND` env var: `haiku`, `local`, or `auto`.
+      3. Default: `haiku`.
+
+    For backwards compatibility, the keyword arguments map onto the Haiku
+    backend's signature. The local backend ignores `client_factory` and
+    `max_retries` (it has its own retry logic) and reads its connection
+    settings from env vars (LOCAL_VLM_BASE_URL, LOCAL_VLM_PRIMARY, etc).
+    """
+    chosen = (backend or os.environ.get("OCR_BACKEND", "haiku")).lower()
+    if chosen == "local":
+        return _ocr_via_local(file_bytes, media_type=media_type, prompt=prompt)
+    if chosen == "auto":
+        try:
+            return _ocr_via_local(file_bytes, media_type=media_type, prompt=prompt)
+        except OcrError as e:
+            log.warning("local OCR failed (%s); falling back to haiku", e)
+            return _ocr_via_haiku(
+                file_bytes,
+                media_type=media_type,
+                prompt=prompt or GENERIC_OCR_PROMPT,
+                model=model or DEFAULT_MODEL,
+                max_tokens=max_tokens,
+                max_retries=max_retries,
+                initial_backoff_seconds=initial_backoff_seconds,
+                client_factory=client_factory,
+            )
+    return _ocr_via_haiku(
+        file_bytes,
+        media_type=media_type,
+        prompt=prompt or GENERIC_OCR_PROMPT,
+        model=model or DEFAULT_MODEL,
+        max_tokens=max_tokens,
+        max_retries=max_retries,
+        initial_backoff_seconds=initial_backoff_seconds,
+        client_factory=client_factory,
+    )
+
+
+def _ocr_via_haiku(
+    file_bytes: bytes,
+    *,
+    media_type: str,
     prompt: str = GENERIC_OCR_PROMPT,
     model: str = DEFAULT_MODEL,
     max_tokens: int = DEFAULT_MAX_TOKENS,
@@ -94,9 +190,6 @@ def ocr_bytes(
 
     Retries on 429 with exponential backoff up to max_retries. On 5xx, retries
     once with a short delay. Other errors raise OcrError.
-
-    `client_factory` is for tests — a no-arg callable returning an Anthropic
-    client. Production code passes None and the helper builds its own.
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -183,6 +276,199 @@ def _status_from_error(err: Exception) -> Optional[int]:
         if isinstance(v, int):
             return v
     return None
+
+
+# ---------------------------------------------------------------------------
+# Local backend (Ollama-served vision model)
+# ---------------------------------------------------------------------------
+
+def _ocr_via_local(
+    file_bytes: bytes,
+    *,
+    media_type: str,
+    prompt: Optional[str] = None,
+    base_url: Optional[str] = None,
+    primary_model: Optional[str] = None,
+    fallback_model: Optional[str] = None,
+    dpi: Optional[int] = None,
+    timeout: Optional[int] = None,
+    http_post=None,
+    pdf_renderer=None,
+) -> OcrResult:
+    """OCR via an Ollama-served vision model on the LAN.
+
+    For PDFs: renders each page to PNG (PyMuPDF), OCRs each page, concatenates.
+    For images: sends the bytes directly.
+
+    Per-page failures retry once on the primary model, then once on the
+    fallback. If a page still fails, raises OcrError.
+
+    Test seams:
+      - http_post(url, body) -> dict       lets tests mock the Ollama call
+      - pdf_renderer(bytes, dpi) -> [bytes] lets tests mock the PDF renderer
+    """
+    base = (base_url or os.environ.get("LOCAL_VLM_BASE_URL", LOCAL_BASE_URL_DEFAULT)).rstrip("/")
+    primary = primary_model or os.environ.get("LOCAL_VLM_PRIMARY", LOCAL_PRIMARY_DEFAULT)
+    fallback = fallback_model or os.environ.get("LOCAL_VLM_FALLBACK", LOCAL_FALLBACK_DEFAULT)
+    dpi_val = dpi or int(os.environ.get("LOCAL_VLM_DPI", str(LOCAL_DPI_DEFAULT)))
+    timeout_val = timeout or int(os.environ.get("LOCAL_VLM_TIMEOUT", str(LOCAL_TIMEOUT_DEFAULT)))
+
+    # Decide on the page list (one image -> one element).
+    if media_type == "application/pdf":
+        renderer = pdf_renderer if pdf_renderer is not None else _default_pdf_renderer
+        try:
+            pages = renderer(file_bytes, dpi=dpi_val)
+        except Exception as e:
+            raise OcrError(f"pdf_render_failed:{e}") from e
+        if not pages:
+            raise OcrError("pdf_no_pages")
+    elif media_type.startswith("image/"):
+        pages = [file_bytes]
+    else:
+        raise OcrError(f"Unsupported media_type: {media_type}")
+
+    poster = http_post if http_post is not None else _default_ollama_post
+    parts: list[str] = []
+    total_in = 0
+    total_out = 0
+    models_used: set[str] = set()
+    is_unreadable_pages = 0
+
+    for page_idx, page_bytes in enumerate(pages):
+        text, model_used, in_tok, out_tok = _ocr_page_with_fallback(
+            page_bytes,
+            primary=primary,
+            fallback=fallback,
+            base_url=base,
+            timeout=timeout_val,
+            prompt_override=prompt,
+            poster=poster,
+            page_idx=page_idx,
+        )
+        parts.append(text)
+        total_in += in_tok
+        total_out += out_tok
+        models_used.add(model_used)
+        if text.strip().upper() == "UNREADABLE":
+            is_unreadable_pages += 1
+
+    full_text = "\n\n".join(parts).strip()
+    is_unreadable = is_unreadable_pages == len(pages) and len(pages) > 0
+    return OcrResult(
+        text="" if is_unreadable else full_text,
+        model="+".join(sorted(models_used)) if models_used else primary,
+        input_tokens=total_in,
+        output_tokens=total_out,
+        cost_usd=0.0,  # local inference — no per-doc API cost
+        media_type=media_type,
+        is_unreadable=is_unreadable,
+    )
+
+
+def _ocr_page_with_fallback(
+    page_bytes: bytes,
+    *,
+    primary: str,
+    fallback: str,
+    base_url: str,
+    timeout: int,
+    prompt_override: Optional[str],
+    poster,
+    page_idx: int,
+) -> tuple[str, str, int, int]:
+    """OCR one page with retry-once on primary, then fallback to secondary.
+
+    Returns (text, model_used, input_tokens, output_tokens).
+    """
+    last_err: Optional[Exception] = None
+    # Primary, attempt 1 + retry.
+    for attempt in range(2):
+        try:
+            text, in_tok, out_tok = _ollama_ocr_call(
+                page_bytes,
+                model=primary,
+                base_url=base_url,
+                timeout=timeout,
+                prompt=prompt_override or _prompt_for_model(primary),
+                poster=poster,
+            )
+            return text, primary, in_tok, out_tok
+        except OcrError as e:
+            last_err = e
+            log.warning("page %d %s attempt %d failed: %s", page_idx, primary, attempt + 1, e)
+    # Fallback model, single attempt.
+    if fallback and fallback != primary:
+        try:
+            text, in_tok, out_tok = _ollama_ocr_call(
+                page_bytes,
+                model=fallback,
+                base_url=base_url,
+                timeout=timeout,
+                prompt=prompt_override or _prompt_for_model(fallback),
+                poster=poster,
+            )
+            log.info("page %d recovered via fallback model %s", page_idx, fallback)
+            return text, fallback, in_tok, out_tok
+        except OcrError as e:
+            last_err = e
+            log.warning("page %d fallback %s failed: %s", page_idx, fallback, e)
+    raise OcrError(f"page {page_idx} failed on primary+fallback: {last_err!r}")
+
+
+def _ollama_ocr_call(
+    page_bytes: bytes,
+    *,
+    model: str,
+    base_url: str,
+    timeout: int,
+    prompt: str,
+    poster,
+) -> tuple[str, int, int]:
+    """One /api/generate call. Returns (text, prompt_eval_count, eval_count)."""
+    b64 = base64.standard_b64encode(page_bytes).decode("ascii")
+    body = {
+        "model": model,
+        "prompt": prompt,
+        "images": [b64],
+        "stream": False,
+        "options": {"temperature": 0.0},
+    }
+    url = f"{base_url}/api/generate"
+    result = poster(url, body, timeout)
+    if not isinstance(result, dict):
+        raise OcrError(f"ollama returned non-dict: {type(result).__name__}")
+    text = result.get("response", "") or ""
+    in_tok = int(result.get("prompt_eval_count", 0) or 0)
+    out_tok = int(result.get("eval_count", 0) or 0)
+    return text.strip(), in_tok, out_tok
+
+
+def _default_ollama_post(url: str, body: dict, timeout: int) -> dict:
+    """Real HTTP POST to Ollama. Tests inject their own poster."""
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body_text = e.read().decode("utf-8", errors="replace")[:500]
+        raise OcrError(f"ollama HTTP {e.code}: {body_text}") from e
+    except urllib.error.URLError as e:
+        raise OcrError(f"ollama URL error: {e}") from e
+    except (TimeoutError, ConnectionError) as e:
+        raise OcrError(f"ollama connection error: {e}") from e
+    except Exception as e:
+        raise OcrError(f"ollama unexpected error: {type(e).__name__}: {e}") from e
+
+
+def _default_pdf_renderer(file_bytes: bytes, *, dpi: int) -> list[bytes]:
+    """Real PDF renderer via preprocessing.pdf_render. Tests inject their own."""
+    from preprocessing.pdf_render import render_pdf_pages
+    return render_pdf_pages(file_bytes, dpi=dpi)
 
 
 # ---------------------------------------------------------------------------
