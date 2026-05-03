@@ -1,6 +1,6 @@
 # Nightly OCR backfill for the OD document-text cache.
 #
-# Invoked by Windows Task Scheduler at 00:30 every night.
+# Invoked by Windows Task Scheduler at 21:00 every night (clinic closes 20:00).
 # Runs the local-VLM OCR backend (glm-ocr -> qwen3.5 fallback -> Haiku page
 # fallback) against the next batch of uncached OD documents.
 #
@@ -31,10 +31,10 @@ $env:LOCAL_VLM_DPI                  = '150'
 $env:LOCAL_VLM_HAIKU_PAGE_FALLBACK  = 'true'  # rescue pages that crash both local models
 if ($apiKey) { $env:ANTHROPIC_API_KEY = $apiKey }
 
-# Per-run caps. Wall-clock budget aims for ~6 hours overnight.
+# Per-run caps. Wall-clock budget aims for ~9 hours overnight (21:00 -> 06:00).
 #   ~1.5 pages/doc avg * ~7s/page on glm-ocr = ~10s/doc
-#   2000 docs * 10s = ~5.5 hours; some buffer for the long-tail multi-page outliers
-$maxDocs    = 2000
+#   2500 docs * 10s = ~7 hours; some buffer for the long-tail multi-page outliers
+$maxDocs    = 2500
 $maxSpend   = 5.00   # Haiku page-fallback cost ceiling per night
 
 $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
