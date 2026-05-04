@@ -1,7 +1,7 @@
 # Nightly OCR backfill for the OD document-text cache.
 #
 # Invoked by Windows Task Scheduler at 21:00 every night (clinic closes 20:00).
-# Runs the local-VLM OCR backend (glm-ocr -> qwen3.5 fallback -> Haiku page
+# Runs the local-VLM OCR backend (qwen2.5vl -> qwen3.5 fallback -> Haiku page
 # fallback) against the next batch of uncached OD documents.
 #
 # Read-only against OD's database and the OD image share. Writes only to
@@ -25,7 +25,7 @@ $env:MCP_CONFIG_FILE                = 'config.prod.json'
 $env:DOC_TEXT_SKIP_CATEGORIES       = '179,180,181,463,467'
 $env:OCR_BACKEND                    = 'local'
 $env:LOCAL_VLM_BASE_URL             = 'http://192.168.127.78:11434'
-$env:LOCAL_VLM_PRIMARY              = 'glm-ocr:q8_0'
+$env:LOCAL_VLM_PRIMARY              = 'qwen2.5vl:7b'
 $env:LOCAL_VLM_FALLBACK             = 'qwen3.5:9b'
 $env:LOCAL_VLM_DPI                  = '150'
 $env:LOCAL_VLM_HAIKU_PAGE_FALLBACK  = 'true'  # rescue pages that crash both local models
