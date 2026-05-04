@@ -31,9 +31,12 @@ if (-not $env:INTAKE_AUTO_FILE_THRESHOLD) { $env:INTAKE_AUTO_FILE_THRESHOLD = '1
 
 # Use the local VLM for the OCR step (free) and Haiku for the structured
 # extraction + classification (more accurate for JSON output).
+# Primary set to qwen2.5vl to match the nightly historical-doc backfill so
+# OCR-quality feedback collected on daytime route slips transfers directly
+# to the engine running against the OD document archive at night.
 $env:OCR_BACKEND                  = 'local'
 $env:LOCAL_VLM_BASE_URL           = 'http://192.168.127.78:11434'
-$env:LOCAL_VLM_PRIMARY            = 'glm-ocr:q8_0'
+$env:LOCAL_VLM_PRIMARY            = 'qwen2.5vl:7b'
 $env:LOCAL_VLM_FALLBACK           = 'qwen3.5:9b'
 $env:LOCAL_VLM_DPI                = '150'
 $env:LOCAL_VLM_HAIKU_PAGE_FALLBACK = 'true'

@@ -170,7 +170,17 @@ def _process_one_pdf(
 ) -> dict:
     """Process one PDF: OCR all pages, split, classify+match each candidate,
     write intake_pending rows, optionally auto-file."""
-    page_texts = ocr_fn(pdf_bytes)  # list[str], one per page
+    # Hook for cache-aware OCR: pass sha + path so the default impl can persist
+    # each page to document_text_cache for /ocr-review/. The injected test
+    # seam takes only pdf_bytes, so we only forward kwargs when supported.
+    try:
+        page_texts = ocr_fn(
+            pdf_bytes,
+            source_pdf_sha256=sha,
+            source_pdf_path=str(pdf_path),
+        )
+    except TypeError:
+        page_texts = ocr_fn(pdf_bytes)
     log.info("intake: %s -> %d pages", pdf_path.name, len(page_texts))
 
     extractions: list[extractor.PageExtraction] = []
@@ -312,25 +322,87 @@ def _process_one_pdf(
 # Production OCR helper (test-injectable)
 # ---------------------------------------------------------------------------
 
-def _default_ocr_pages(pdf_bytes: bytes) -> list[str]:
+def _default_ocr_pages(
+    pdf_bytes: bytes,
+    *,
+    source_pdf_sha256: Optional[str] = None,
+    source_pdf_path: Optional[str] = None,
+) -> list[str]:
     """Render the PDF to PNG pages, OCR each, and return the page texts.
 
     Uses the existing local-VLM (or whichever OCR_BACKEND is configured).
     Falls back to placeholders for pages that fail to OCR — so a single bad
     page doesn't drop the whole batch.
+
+    Side effect: each page's OCR result is also persisted to
+    `document_text_cache` (Source='intake_daytime') so staff can review OCR
+    accuracy on daytime scans through the existing /ocr-review/ UI. The cache
+    write is best-effort — if it fails, OCR text is still returned.
+    Disable via env INTAKE_OCR_CACHE_DISABLE=true.
     """
+    from preprocessing import document_text_cache as dtc
     from preprocessing import ocr_helper
     from preprocessing.pdf_render import render_pdf_pages
 
+    cache_enabled = (
+        os.environ.get("INTAKE_OCR_CACHE_DISABLE", "false").lower() != "true"
+        and source_pdf_sha256 is not None
+        and source_pdf_path is not None
+    )
+    cache_conn = None
+    if cache_enabled:
+        try:
+            cache_conn = dtc._connect(dtc.init_cache())  # type: ignore[attr-defined]
+        except Exception as e:
+            log.warning("ocr_pages: cache open failed, continuing without persist: %s", e)
+            cache_enabled = False
+
     page_pngs = render_pdf_pages(pdf_bytes, dpi=150)
+    pdf_name = Path(source_pdf_path).name if source_pdf_path else None
     out: list[str] = []
     for i, page_bytes in enumerate(page_pngs):
+        text = ""
+        model: Optional[str] = None
+        cost: Optional[float] = None
+        cache_status = "ok"
+        cache_error: Optional[str] = None
         try:
             r = ocr_helper.ocr_bytes(page_bytes, media_type="image/png")
-            out.append(r.text or "")
+            text = r.text or ""
+            model = r.model
+            cost = r.cost_usd
+            if r.is_unreadable:
+                cache_status = "unreadable"
         except Exception as e:
             log.warning("ocr_pages: page %d failed: %s", i, e)
-            out.append("")
+            cache_status = "error"
+            cache_error = f"{type(e).__name__}: {e}"
+        out.append(text)
+
+        if cache_enabled and cache_conn is not None:
+            try:
+                dtc.put_intake_page_text(
+                    cache_conn,
+                    source_pdf_sha256=source_pdf_sha256,  # type: ignore[arg-type]
+                    page_index=i,
+                    source_pdf_path=source_pdf_path,  # type: ignore[arg-type]
+                    pat_num=None,
+                    file_name=pdf_name,
+                    text=text,
+                    page_count_in_source=len(page_pngs),
+                    ocr_model=model,
+                    status=cache_status,
+                    error_message=cache_error,
+                    cost_usd=cost,
+                )
+            except Exception as e:
+                log.warning("ocr_pages: cache write failed for page %d: %s", i, e)
+
+    if cache_conn is not None:
+        try:
+            cache_conn.close()
+        except Exception:  # pragma: no cover
+            pass
     return out
 
 

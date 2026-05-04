@@ -145,12 +145,15 @@ def api_queue():
       include_reviewed=1          include already-approved rows
       status=ok,error,...         filter by Status (comma-sep)
       doc_category=<int>          filter by DocCategory DefNum
+      source=od_backfill,intake_daytime  filter by Source (comma-sep)
       limit=<int>, offset=<int>   pagination (default 200 / 0, max 500)
     """
     since = _since_iso()
     only_unreviewed = request.args.get("include_reviewed", "") not in ("1", "true", "yes")
     status_arg = request.args.get("status", "").strip()
     status_in = [s.strip() for s in status_arg.split(",") if s.strip()] or None
+    source_arg = request.args.get("source", "").strip()
+    source_in = [s.strip() for s in source_arg.split(",") if s.strip()] or None
     doc_cat = request.args.get("doc_category")
     doc_cat_int = int(doc_cat) if doc_cat else None
     limit = min(500, max(1, int(request.args.get("limit", "200"))))
@@ -159,6 +162,7 @@ def api_queue():
         rows = cache.list_recent_docs(
             conn, since_iso=since, only_unreviewed=only_unreviewed,
             status_in=status_in, doc_category=doc_cat_int,
+            source_in=source_in,
             limit=limit, offset=offset,
         )
     return jsonify({
@@ -179,11 +183,23 @@ def api_doc_detail(doc_num: int):
 
 @ocr_review_bp.get("/api/doc/<int:doc_num>/pdf")
 def api_doc_pdf(doc_num: int):
-    """Render the source PDF/image from OD's share. Returns the raw file
-    so the browser can display it in an iframe."""
+    """Render the source PDF/image so the browser can display it in an iframe.
+
+    Two source paths:
+      - Source='od_backfill' (default): resolve the on-disk path via the OD
+        patient-folder convention and stream the original file.
+      - Source='intake_daytime': open the batch PDF on the share, render only
+        the row's PageIndex to a single-page PDF in memory, and stream that.
+    """
     with cache.open_cache() as conn:
         row = cache.get_text(conn, doc_num)
-    if row is None or not row.FileName:
+    if row is None:
+        return jsonify({"error": f"doc_num {doc_num} not in cache"}), 404
+
+    if (row.Source or "od_backfill") == "intake_daytime":
+        return _serve_intake_page_pdf(row)
+
+    if not row.FileName:
         return jsonify({"error": f"doc_num {doc_num} not in cache"}), 404
 
     tools = _get_tools_instance()
@@ -215,6 +231,46 @@ def api_doc_pdf(doc_num: int):
     mime = "application/pdf" if str(path).lower().endswith(".pdf") else "image/jpeg"
     return send_file(str(path), mimetype=mime, as_attachment=False,
                      download_name=path.name)
+
+
+def _serve_intake_page_pdf(row: cache.DocTextRow):
+    """Stream a one-page PDF extracted from the intake source PDF. Uses pymupdf
+    to slice just `row.PageIndex` so the browser shows the exact page the OCR
+    text came from."""
+    if not row.SourcePdfPath:
+        return jsonify({"error": "intake row has no SourcePdfPath"}), 410
+    src = Path(row.SourcePdfPath)
+    if not src.exists():
+        return jsonify({"error": f"source file missing: {src}"}), 410
+    page_idx = int(row.PageIndex or 0)
+
+    try:
+        import pymupdf  # type: ignore[import-not-found]
+    except Exception as e:
+        return jsonify({"error": f"pymupdf unavailable: {e}"}), 500
+
+    try:
+        doc = pymupdf.open(str(src))
+    except Exception as e:
+        return jsonify({"error": f"open_failed: {e}"}), 500
+
+    try:
+        if page_idx < 0 or page_idx >= doc.page_count:
+            return jsonify({
+                "error": f"page_index {page_idx} out of range (0..{doc.page_count - 1})",
+            }), 410
+        out = pymupdf.open()
+        out.insert_pdf(doc, from_page=page_idx, to_page=page_idx)
+        buf = io.BytesIO(out.tobytes())
+        out.close()
+    finally:
+        doc.close()
+
+    download_name = f"{src.stem}_page{page_idx + 1}.pdf"
+    return send_file(
+        buf, mimetype="application/pdf", as_attachment=False,
+        download_name=download_name,
+    )
 
 
 @ocr_review_bp.post("/api/doc/<int:doc_num>/approve")

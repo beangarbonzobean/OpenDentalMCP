@@ -140,6 +140,13 @@
           <option value="error">error</option>
         </select>
       </label>
+      <label>Source:
+        <select id="source-filter">
+          <option value="">All</option>
+          <option value="od_backfill">Nightly (OD docs)</option>
+          <option value="intake_daytime">Intake (daytime scans)</option>
+        </select>
+      </label>
       <label><input type="checkbox" id="include-reviewed"> Show approved</label>
       <span id="queue-count" class="badge">0</span>
     </div>
@@ -213,9 +220,11 @@ async function loadQueue() {
   const days = parseInt($("#since-filter").value, 10);
   const since = new Date(Date.now() - days * 86400000).toISOString();
   const status = $("#status-filter").value;
+  const source = $("#source-filter").value;
   const includeReviewed = $("#include-reviewed").checked ? "1" : "0";
   const params = new URLSearchParams({ since });
   if (status) params.set("status", status);
+  if (source) params.set("source", source);
   params.set("include_reviewed", includeReviewed);
   const r = await fetch(`/ocr-review/api/queue?${params.toString()}`);
   const data = await r.json();
@@ -231,10 +240,16 @@ async function loadQueue() {
     div.className = "item";
     div.dataset.id = it.DocNum;
     const reviewedNote = it.Reviewed ? `<span class="badge" style="background:#e3f5e9;color:var(--good)">approved</span> ` : '';
+    const sourceBadge = it.Source === "intake_daytime"
+      ? `<span class="badge" style="background:#fef0d4;color:#7a5e00">intake p${(it.PageIndex ?? 0) + 1}</span> `
+      : '';
+    const titleLabel = it.Source === "intake_daytime"
+      ? `${escapeHtml(it.FileName ?? "")} · page ${((it.PageIndex ?? 0) + 1)}`
+      : `DocNum ${it.DocNum} · ${escapeHtml(it.FileName ?? "")}`;
     div.innerHTML = `
       <div>
-        <div class="name">DocNum ${it.DocNum} · ${escapeHtml(it.FileName ?? "")}</div>
-        <div class="meta">PatNum ${it.PatNum ?? '—'} · ${reviewedNote}<span class="badge ${it.Status}">${it.Status}</span> · ${it.text_length} chars · ${fmtTime(it.OcrAt)}</div>
+        <div class="name">${titleLabel}</div>
+        <div class="meta">${sourceBadge}PatNum ${it.PatNum ?? '—'} · ${reviewedNote}<span class="badge ${it.Status}">${it.Status}</span> · ${it.text_length} chars · ${fmtTime(it.OcrAt)}</div>
         <div class="text-preview">${escapeHtml(it.text_preview ?? "")}</div>
       </div>
       <div></div>
@@ -353,6 +368,7 @@ function toast(msg, isError = false) {
 $("#refresh").addEventListener("click", () => { loadSummary(); loadQueue(); });
 $("#since-filter").addEventListener("change", () => { loadSummary(); loadQueue(); });
 $("#status-filter").addEventListener("change", loadQueue);
+$("#source-filter").addEventListener("change", loadQueue);
 $("#include-reviewed").addEventListener("change", loadQueue);
 
 (async () => {
