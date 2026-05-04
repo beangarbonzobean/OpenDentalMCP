@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OCR Review — HBDC</title>
+<style>
+  :root {
+    --bg: #f5f6fa; --panel: #fff; --border: #d8dde6;
+    --muted: #65707f; --accent: #2f6fed; --accent-soft: #e6efff;
+    --good: #228e3a; --warn: #b56b1f; --bad: #c03b3b;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  body { background: var(--bg); color: #0f1620; margin: 0; font-size: 14px; }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 18px; background: var(--panel); border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header .subtitle { color: var(--muted); margin-left: 12px; font-size: 12px; }
+
+  .summary {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px; padding: 12px 18px; background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+  .summary .stat { background: var(--bg); border-radius: 4px; padding: 10px; }
+  .summary .stat .label { font-size: 11px; color: var(--muted); text-transform: uppercase; }
+  .summary .stat .value { font-size: 20px; font-weight: 600; margin-top: 4px; }
+  .summary .stat .sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  main {
+    display: grid;
+    grid-template-columns: 480px 1fr;
+    height: calc(100vh - 175px);
+  }
+
+  .queue { background: var(--panel); border-right: 1px solid var(--border); overflow-y: auto; }
+  .queue .filters {
+    padding: 10px 14px; border-bottom: 1px solid var(--border);
+    display: flex; gap: 8px; flex-wrap: wrap; align-items: center; font-size: 12px;
+  }
+  .queue .filters select, .queue .filters input { padding: 4px 6px; }
+  .queue .item {
+    padding: 10px 14px; border-bottom: 1px solid var(--border); cursor: pointer;
+    display: grid; grid-template-columns: 1fr auto; gap: 4px 12px;
+  }
+  .queue .item:hover { background: var(--accent-soft); }
+  .queue .item.selected { background: var(--accent-soft); border-left: 3px solid var(--accent); padding-left: 11px; }
+  .queue .item .name { font-weight: 600; font-size: 13px; }
+  .queue .item .meta { color: var(--muted); font-size: 11px; }
+  .queue .item .badge {
+    display: inline-block; padding: 1px 6px; border-radius: 3px;
+    font-size: 10px; background: #e1e7ef; color: #2c3947;
+  }
+  .badge.ok          { background: #e3f5e9; color: var(--good); }
+  .badge.unreadable  { background: #fff4d4; color: var(--warn); }
+  .badge.unsupported { background: #f0e7f7; color: #6f4099; }
+  .badge.error       { background: #fde7e7; color: var(--bad); }
+
+  .detail { display: grid; grid-template-rows: auto 1fr auto; overflow: hidden; }
+  .detail .summary-bar {
+    padding: 10px 18px; border-bottom: 1px solid var(--border);
+    background: var(--panel); display: flex; gap: 18px; flex-wrap: wrap;
+    font-size: 12px;
+  }
+  .detail .summary-bar .field { display: flex; flex-direction: column; }
+  .detail .summary-bar .field .lbl { color: var(--muted); font-size: 11px; }
+  .detail .summary-bar .field .val { font-weight: 600; }
+  .detail .body {
+    display: grid; grid-template-columns: 1fr 1fr;
+    overflow: hidden; height: 100%;
+  }
+  .detail .body iframe, .detail .body img {
+    border: 0; width: 100%; height: 100%; background: #2b2f36;
+  }
+  .detail .body .text {
+    padding: 12px 16px; overflow-y: auto; font-family: ui-monospace, SFMono-Regular,
+    Menlo, monospace; font-size: 12px; line-height: 1.45; white-space: pre-wrap;
+    border-left: 1px solid var(--border); background: var(--panel);
+  }
+  .detail .actions {
+    padding: 12px 18px; border-top: 1px solid var(--border); background: var(--panel);
+    display: flex; gap: 8px; justify-content: flex-end; align-items: center;
+  }
+  .detail .actions .meta { margin-right: auto; font-size: 12px; color: var(--muted); }
+
+  button {
+    border: 1px solid var(--border); background: var(--panel);
+    padding: 6px 12px; font-size: 13px; cursor: pointer; border-radius: 4px;
+  }
+  button:hover { background: var(--accent-soft); }
+  button.primary { background: var(--good); color: #fff; border-color: var(--good); }
+  button.primary:hover { filter: brightness(0.95); }
+  button.danger { background: var(--bad); color: #fff; border-color: var(--bad); }
+  button.danger:hover { filter: brightness(0.95); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .empty { padding: 40px; text-align: center; color: var(--muted); }
+  .toast {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    background: #1c2330; color: #fff; padding: 10px 16px; border-radius: 4px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.18); z-index: 100;
+  }
+  .toast.error { background: var(--bad); }
+  .text-preview { color: var(--muted); font-size: 11px; margin-top: 2px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>OCR Review <span class="subtitle">Document text cache · Huntington Beach Dental Center</span></h1>
+  </div>
+  <div>
+    <button id="refresh">Refresh</button>
+  </div>
+</header>
+
+<section class="summary" id="summary"></section>
+
+<main>
+  <section class="queue">
+    <div class="filters">
+      <label>Window:
+        <select id="since-filter">
+          <option value="1">Last 24 hours</option>
+          <option value="3">Last 3 days</option>
+          <option value="7" selected>Last 7 days</option>
+          <option value="30">Last 30 days</option>
+        </select>
+      </label>
+      <label>Status:
+        <select id="status-filter">
+          <option value="">All</option>
+          <option value="ok">ok</option>
+          <option value="unreadable">unreadable</option>
+          <option value="unsupported">unsupported</option>
+          <option value="error">error</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="include-reviewed"> Show approved</label>
+      <span id="queue-count" class="badge">0</span>
+    </div>
+    <div id="queue-list"></div>
+  </section>
+
+  <section class="detail" id="detail-panel">
+    <div class="empty">Select a doc on the left to review its OCR.</div>
+  </section>
+
+  <template id="detail-template">
+    <section class="detail">
+      <div class="summary-bar">
+        <div class="field"><span class="lbl">DocNum</span><span class="val" id="d-docnum">—</span></div>
+        <div class="field"><span class="lbl">PatNum</span><span class="val" id="d-patnum">—</span></div>
+        <div class="field"><span class="lbl">FileName</span><span class="val" id="d-filename">—</span></div>
+        <div class="field"><span class="lbl">DocCategory</span><span class="val" id="d-category">—</span></div>
+        <div class="field"><span class="lbl">Status</span><span class="val" id="d-status">—</span></div>
+        <div class="field"><span class="lbl">Pages</span><span class="val" id="d-pages">—</span></div>
+        <div class="field"><span class="lbl">OCR'd at</span><span class="val" id="d-ocrat">—</span></div>
+        <div class="field"><span class="lbl">Cost</span><span class="val" id="d-cost">—</span></div>
+        <div class="field"><span class="lbl">Model</span><span class="val" id="d-model">—</span></div>
+      </div>
+      <div class="body">
+        <iframe id="d-pdf" title="source document"></iframe>
+        <div class="text" id="d-text">…</div>
+      </div>
+      <div class="actions">
+        <span class="meta" id="d-reviewmeta"></span>
+        <button id="d-flag" class="danger">Flag for re-OCR (delete)</button>
+        <button id="d-approve" class="primary">Approve</button>
+      </div>
+    </section>
+  </template>
+</main>
+
+<script>
+const $ = (sel, root = document) => root.querySelector(sel);
+const fmtCost = (v) => v == null ? "—" : `$${(+v).toFixed(4)}`;
+const fmtTime = (s) => {
+  if (!s) return "—";
+  try { const d = new Date(s); return d.toLocaleString(); } catch { return s; }
+};
+const escapeHtml = (s) => String(s ?? "")
+  .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+  .replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+
+let currentDocNum = null;
+
+async function loadSummary() {
+  const days = parseInt($("#since-filter").value, 10);
+  const since = new Date(Date.now() - days * 86400000).toISOString();
+  const r = await fetch(`/ocr-review/api/summary?since=${encodeURIComponent(since)}`);
+  if (!r.ok) return;
+  const s = await r.json();
+  const stats = $("#summary");
+  const byStatus = s.by_status || {};
+  stats.innerHTML = `
+    <div class="stat"><div class="label">In window</div><div class="value">${s.total ?? 0}</div><div class="sub">${days}-day window</div></div>
+    <div class="stat"><div class="label">OK</div><div class="value" style="color:var(--good)">${byStatus.ok ?? 0}</div></div>
+    <div class="stat"><div class="label">Unreadable</div><div class="value" style="color:var(--warn)">${byStatus.unreadable ?? 0}</div></div>
+    <div class="stat"><div class="label">Unsupported</div><div class="value" style="color:#6f4099">${byStatus.unsupported ?? 0}</div></div>
+    <div class="stat"><div class="label">Errors</div><div class="value" style="color:var(--bad)">${byStatus.error ?? 0}</div></div>
+    <div class="stat"><div class="label">Awaiting review</div><div class="value">${s.unreviewed ?? 0}</div></div>
+    <div class="stat"><div class="label">Cost (window)</div><div class="value">${fmtCost(s.cost_usd_total)}</div></div>
+    <div class="stat"><div class="label">Last run</div><div class="value" style="font-size:14px">${fmtTime(s.last_run)}</div></div>
+  `;
+}
+
+async function loadQueue() {
+  const days = parseInt($("#since-filter").value, 10);
+  const since = new Date(Date.now() - days * 86400000).toISOString();
+  const status = $("#status-filter").value;
+  const includeReviewed = $("#include-reviewed").checked ? "1" : "0";
+  const params = new URLSearchParams({ since });
+  if (status) params.set("status", status);
+  params.set("include_reviewed", includeReviewed);
+  const r = await fetch(`/ocr-review/api/queue?${params.toString()}`);
+  const data = await r.json();
+  $("#queue-count").textContent = data.count;
+  const list = $("#queue-list");
+  list.innerHTML = "";
+  if (!data.items.length) {
+    list.innerHTML = `<div class="empty">No docs in this view.</div>`;
+    return;
+  }
+  data.items.forEach((it) => {
+    const div = document.createElement("div");
+    div.className = "item";
+    div.dataset.id = it.DocNum;
+    const reviewedNote = it.Reviewed ? `<span class="badge" style="background:#e3f5e9;color:var(--good)">approved</span> ` : '';
+    div.innerHTML = `
+      <div>
+        <div class="name">DocNum ${it.DocNum} · ${escapeHtml(it.FileName ?? "")}</div>
+        <div class="meta">PatNum ${it.PatNum ?? '—'} · ${reviewedNote}<span class="badge ${it.Status}">${it.Status}</span> · ${it.text_length} chars · ${fmtTime(it.OcrAt)}</div>
+        <div class="text-preview">${escapeHtml(it.text_preview ?? "")}</div>
+      </div>
+      <div></div>
+    `;
+    div.addEventListener("click", () => selectDoc(it.DocNum));
+    list.appendChild(div);
+  });
+}
+
+async function selectDoc(docNum) {
+  currentDocNum = docNum;
+  document.querySelectorAll(".queue .item").forEach((el) =>
+    el.classList.toggle("selected", el.dataset.id == docNum)
+  );
+  const r = await fetch(`/ocr-review/api/doc/${docNum}`);
+  if (!r.ok) {
+    toast(`Failed to load doc ${docNum}`, true);
+    return;
+  }
+  const { item } = await r.json();
+  const tpl = $("#detail-template").content.cloneNode(true);
+  const detail = tpl.querySelector(".detail");
+  $("#detail-panel").replaceWith(detail);
+  detail.id = "detail-panel";
+
+  $("#d-docnum", detail).textContent = item.DocNum;
+  $("#d-patnum", detail).textContent = item.PatNum ?? "—";
+  $("#d-filename", detail).textContent = item.FileName ?? "—";
+  $("#d-category", detail).textContent = item.DocCategory ?? "—";
+  $("#d-status", detail).textContent = item.Status;
+  $("#d-pages", detail).textContent = item.PageCount ?? "—";
+  $("#d-ocrat", detail).textContent = fmtTime(item.OcrAt);
+  $("#d-cost", detail).textContent = fmtCost(item.CostUsd);
+  $("#d-model", detail).textContent = item.OcrModel ?? "—";
+
+  const reviewmeta = $("#d-reviewmeta", detail);
+  if (item.Reviewed) {
+    reviewmeta.textContent = `Approved by ${item.ReviewedBy} at ${fmtTime(item.ReviewedAt)}`;
+  } else {
+    reviewmeta.textContent = "Not yet reviewed";
+  }
+
+  $("#d-pdf", detail).src = `/ocr-review/api/doc/${docNum}/pdf`;
+  $("#d-text", detail).textContent = item.Text ?? "(no text)";
+
+  $("#d-approve", detail).addEventListener("click", () => doApprove(docNum));
+  $("#d-flag", detail).addEventListener("click", () => doFlag(docNum));
+}
+
+async function doApprove(docNum) {
+  setButtonsDisabled(true);
+  try {
+    const r = await fetch(`/ocr-review/api/doc/${docNum}/approve`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        reviewer: window.localStorage.getItem("ocr_reviewer") || "staff",
+      }),
+    });
+    const data = await r.json();
+    if (!r.ok || !data.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    toast(`DocNum ${docNum} approved.`);
+    await Promise.all([loadSummary(), loadQueue()]);
+    showEmpty();
+  } catch (e) {
+    toast(`Approve failed: ${e.message}`, true);
+  } finally {
+    setButtonsDisabled(false);
+  }
+}
+
+async function doFlag(docNum) {
+  if (!confirm(`Flag DocNum ${docNum} as bad OCR? It will be DELETED from the cache. The next backfill run will re-OCR it.`)) return;
+  setButtonsDisabled(true);
+  const reason = prompt("Reason (optional):", "bad_ocr") ?? "bad_ocr";
+  try {
+    const r = await fetch(`/ocr-review/api/doc/${docNum}/flag`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason }),
+    });
+    const data = await r.json();
+    if (!r.ok || !data.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    toast(`DocNum ${docNum} deleted from cache. Will re-OCR next run.`);
+    await Promise.all([loadSummary(), loadQueue()]);
+    showEmpty();
+  } catch (e) {
+    toast(`Flag failed: ${e.message}`, true);
+  } finally {
+    setButtonsDisabled(false);
+  }
+}
+
+function showEmpty() {
+  const main = document.querySelector("main");
+  const old = main.querySelector(".detail");
+  if (old) {
+    const empty = document.createElement("section");
+    empty.id = "detail-panel";
+    empty.className = "detail";
+    empty.innerHTML = `<div class="empty">Select a doc on the left to review its OCR.</div>`;
+    old.replaceWith(empty);
+  }
+}
+
+function setButtonsDisabled(b) {
+  document.querySelectorAll(".detail .actions button").forEach((bt) => (bt.disabled = b));
+}
+
+function toast(msg, isError = false) {
+  const el = document.createElement("div");
+  el.className = "toast" + (isError ? " error" : "");
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 4000);
+}
+
+$("#refresh").addEventListener("click", () => { loadSummary(); loadQueue(); });
+$("#since-filter").addEventListener("change", () => { loadSummary(); loadQueue(); });
+$("#status-filter").addEventListener("change", loadQueue);
+$("#include-reviewed").addEventListener("change", loadQueue);
+
+(async () => {
+  await Promise.all([loadSummary(), loadQueue()]);
+})();
+</script>
+</body>
+</html>

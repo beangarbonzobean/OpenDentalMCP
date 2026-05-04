@@ -35,6 +35,19 @@ live/**/voice_drops/
 __pycache__/
 *.pyc
 
+# Preprocessing layer caches (PHI; backed up out-of-band)
+live/OpenDentalMCP/data/*.db
+live/OpenDentalMCP/data/*.db-wal
+live/OpenDentalMCP/data/*.db-shm
+live/OpenDentalMCP/data/*.lock
+live/OpenDentalMCP/logs/
+
+# pytest artifacts
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
 # OS / editor / agent state
 Thumbs.db
 Desktop.ini

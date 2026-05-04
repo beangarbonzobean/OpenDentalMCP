@@ -3359,6 +3359,67 @@ class OpenDentalMCPTools:
                     },
                     "required": ["task_id"]
                 }
+            },
+            # ── Document text preprocessing (OCR'd image-module text cache) ──
+            {
+                "name": "get_document_text",
+                "description": "Return the cached OCR'd text for an Open Dental document (image-module file). On a cache miss, runs OCR synchronously and caches the result. Read-only against OD's database; the OD file on the share is read once and never modified.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "doc_num": {
+                            "type": "integer",
+                            "description": "DocNum of the document in Open Dental's `document` table"
+                        }
+                    },
+                    "required": ["doc_num"]
+                }
+            },
+            {
+                "name": "get_patient_document_texts",
+                "description": "List the cached OCR'd documents for a patient. Returns total_in_od (live count from OD) and cached (count present in our cache) so the caller can see gaps.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "pat_num": {
+                            "type": "integer",
+                            "description": "PatNum"
+                        },
+                        "doc_category": {
+                            "type": "integer",
+                            "description": "Optional DocCategory DefNum filter"
+                        }
+                    },
+                    "required": ["pat_num"]
+                }
+            },
+            {
+                "name": "search_document_text",
+                "description": "Keyword/FTS5 search over OCR'd document text. Optional pat_num and doc_category filters narrow the search. Returns ranked snippets.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Search terms (FTS5 match)"},
+                        "pat_num": {"type": "integer", "description": "Optional PatNum filter"},
+                        "doc_category": {"type": "integer", "description": "Optional DocCategory filter"},
+                        "k": {"type": "integer", "description": "Max results (default 20)"}
+                    },
+                    "required": ["query"]
+                }
+            },
+            {
+                "name": "rebuild_document_text_index",
+                "description": "Backfill the document-text cache by OCR'ing uncached documents from OD. Read-only on OD's DB and on the OD image share. Honors max_docs and max_spend_usd guardrails. Use dry_run=true to preview without OCR'ing.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "max_docs": {"type": "integer", "description": "Stop after this many docs scanned (default 500)"},
+                        "max_spend_usd": {"type": "number", "description": "Halt when running cost exceeds this in USD (default 5.0)"},
+                        "after_doc_num": {"type": "integer", "description": "Resume from DocNum greater than this (default 0)"},
+                        "prune": {"type": "boolean", "description": "Delete cache rows whose DocNum no longer exists in OD (default false)"},
+                        "dry_run": {"type": "boolean", "description": "List would-be-OCR'd docs, make no API calls, write no cache rows (default false)"}
+                    }
+                }
             }
         ]
 
@@ -3642,6 +3703,29 @@ class OpenDentalMCPTools:
                     task_id=arguments.get("task_id"),
                     delete_notes=arguments.get("delete_notes", True),
                 )
+            # ── Document text preprocessing ──
+            elif tool_name == "get_document_text":
+                return self._get_document_text(arguments.get("doc_num"))
+            elif tool_name == "get_patient_document_texts":
+                return self._get_patient_document_texts(
+                    pat_num=arguments.get("pat_num"),
+                    doc_category=arguments.get("doc_category"),
+                )
+            elif tool_name == "search_document_text":
+                return self._search_document_text(
+                    query=arguments.get("query"),
+                    pat_num=arguments.get("pat_num"),
+                    doc_category=arguments.get("doc_category"),
+                    k=arguments.get("k", 20),
+                )
+            elif tool_name == "rebuild_document_text_index":
+                return self._rebuild_document_text_index(
+                    max_docs=arguments.get("max_docs", 500),
+                    max_spend_usd=arguments.get("max_spend_usd", 5.0),
+                    after_doc_num=arguments.get("after_doc_num", 0),
+                    prune=arguments.get("prune", False),
+                    dry_run=arguments.get("dry_run", False),
+                )
             else:
                 raise ValueError(f"Unknown tool: {tool_name}")
         except Exception as e:
@@ -3819,6 +3903,12 @@ class OpenDentalMCPTools:
                     "endpoint": "/tasknotes",
                     "description": "Notes / comments threaded under a task. DELETE not supported by API.",
                     "methods": ["GET", "POST"]
+                },
+                {
+                    "name": "document_text_cache",
+                    "endpoint": "(local SQLite cache)",
+                    "description": "OCR'd text from OD documents. Backed by preprocessing/document_text_cache.py; see get_document_text, get_patient_document_texts, search_document_text, rebuild_document_text_index.",
+                    "methods": ["LOCAL"]
                 }
             ],
             "api_url": self.api_url
@@ -7868,5 +7958,139 @@ LIMIT 1000
                     pass
         except Exception as e:
             logger.error(f"Error in delete_task: {e}")
+            return {"success": False, "error": str(e)}
+
+    # ------------------------------------------------------------------
+    # Document text preprocessing (image-module OCR cache)
+    # ------------------------------------------------------------------
+    def _get_document_text(self, doc_num) -> Dict:
+        """Return cached OCR text for an OD document, OCR'ing on cache miss.
+
+        Read-only against OD's database and the OD image share.
+        """
+        try:
+            doc_num_int = int(doc_num)
+        except (TypeError, ValueError):
+            return {"success": False, "error": "doc_num must be an integer"}
+        try:
+            from preprocessing import document_text_index as _idx
+            row, source = _idx.fetch_or_ocr(self, doc_num_int)
+            if row is None:
+                return {"success": False, "error": f"DocNum {doc_num_int} not found in OD"}
+            return {
+                "success": True,
+                "doc_num": row.DocNum,
+                "pat_num": row.PatNum,
+                "file_name": row.FileName,
+                "doc_category": row.DocCategory,
+                "date_created": row.DateCreated,
+                "text": row.Text,
+                "page_count": row.PageCount,
+                "status": row.Status,
+                "ocr_at": row.OcrAt,
+                "source": source,
+                "error_message": row.ErrorMessage,
+            }
+        except Exception as e:
+            logger.error(f"Error in _get_document_text: {e}", exc_info=True)
+            return {"success": False, "error": str(e)}
+
+    def _get_patient_document_texts(self, pat_num, doc_category=None) -> Dict:
+        """List cached OCR documents for a patient with a total-vs-cached gap signal."""
+        try:
+            pat_num_int = int(pat_num)
+        except (TypeError, ValueError):
+            return {"success": False, "error": "pat_num must be an integer"}
+        try:
+            from preprocessing import document_text_cache as _cache
+            from preprocessing import document_text_index as _idx
+            cat_int = int(doc_category) if doc_category is not None else None
+            with _cache.open_cache() as conn:
+                rows = _cache.get_texts_for_patient(conn, pat_num_int, cat_int)
+            total = _idx.count_documents_for_patient(self, pat_num_int)
+            note = None
+            if total > len(rows):
+                note = f"{total - len(rows)} document(s) in OD are not yet cached; run rebuild_document_text_index"
+            return {
+                "success": True,
+                "pat_num": pat_num_int,
+                "total_in_od": total,
+                "cached": len(rows),
+                "documents": [
+                    {
+                        "doc_num": r.DocNum,
+                        "file_name": r.FileName,
+                        "doc_category": r.DocCategory,
+                        "date_created": r.DateCreated,
+                        "status": r.Status,
+                        "text": r.Text,
+                        "page_count": r.PageCount,
+                        "ocr_at": r.OcrAt,
+                        "error_message": r.ErrorMessage,
+                    }
+                    for r in rows
+                ],
+                "note": note,
+            }
+        except Exception as e:
+            logger.error(f"Error in _get_patient_document_texts: {e}", exc_info=True)
+            return {"success": False, "error": str(e)}
+
+    def _search_document_text(self, query=None, pat_num=None, doc_category=None, k=20) -> Dict:
+        """FTS5 keyword search over cached OCR text. v1: substring; v2 will swap to vector."""
+        if not isinstance(query, str) or not query.strip():
+            return {"success": False, "error": "query must be a non-empty string"}
+        try:
+            from preprocessing import document_text_cache as _cache
+            pat = int(pat_num) if pat_num is not None else None
+            cat = int(doc_category) if doc_category is not None else None
+            limit = max(1, min(int(k or 20), 200))
+            with _cache.open_cache() as conn:
+                hits = _cache.search(conn, query, pat_num=pat, doc_category=cat, k=limit)
+            return {
+                "success": True,
+                "query": query,
+                "count": len(hits),
+                "matches": [
+                    {
+                        "doc_num": h.DocNum,
+                        "pat_num": h.PatNum,
+                        "file_name": h.FileName,
+                        "snippet": h.Snippet,
+                        "score": h.Score,
+                        "status": h.Status,
+                    }
+                    for h in hits
+                ],
+            }
+        except Exception as e:
+            logger.error(f"Error in _search_document_text: {e}", exc_info=True)
+            return {"success": False, "error": str(e)}
+
+    def _rebuild_document_text_index(
+        self,
+        max_docs: int = 500,
+        max_spend_usd: float = 5.0,
+        after_doc_num: int = 0,
+        prune: bool = False,
+        dry_run: bool = False,
+    ) -> Dict:
+        """Trigger a backfill run. Returns counters from BackfillResult."""
+        try:
+            from dataclasses import asdict
+            from preprocessing import document_text_index as _idx
+            res = _idx.backfill(
+                self,
+                max_docs=int(max_docs),
+                max_spend_usd=float(max_spend_usd),
+                after_doc_num=int(after_doc_num),
+                prune=bool(prune),
+                dry_run=bool(dry_run),
+            )
+            payload = asdict(res)
+            payload["success"] = bool(res.success)
+            return payload
+        except Exception as e:
+            logger.error(f"Error in _rebuild_document_text_index: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
 

@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Intake Review — HBDC</title>
+<style>
+  :root {
+    --bg: #f5f6fa;
+    --panel: #fff;
+    --border: #d8dde6;
+    --muted: #65707f;
+    --accent: #2f6fed;
+    --accent-soft: #e6efff;
+    --good: #228e3a;
+    --warn: #b56b1f;
+    --bad:  #c03b3b;
+    --neutral: #4d5663;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  body { background: var(--bg); color: #0f1620; margin: 0; font-size: 14px; }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 18px; background: var(--panel); border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header .subtitle { color: var(--muted); margin-left: 12px; font-size: 12px; }
+  header .actions button { margin-left: 6px; }
+  main {
+    display: grid;
+    grid-template-columns: 460px 1fr;
+    height: calc(100vh - 50px);
+  }
+  .queue {
+    background: var(--panel); border-right: 1px solid var(--border);
+    overflow-y: auto;
+  }
+  .queue .filters {
+    padding: 10px 14px; border-bottom: 1px solid var(--border);
+    display: flex; gap: 8px; align-items: center; font-size: 12px;
+  }
+  .queue .filters select { padding: 4px 6px; }
+  .queue .item {
+    padding: 12px 14px; border-bottom: 1px solid var(--border); cursor: pointer;
+    display: grid; grid-template-columns: 1fr auto; gap: 4px 12px;
+  }
+  .queue .item:hover { background: var(--accent-soft); }
+  .queue .item.selected { background: var(--accent-soft); border-left: 3px solid var(--accent); padding-left: 11px; }
+  .queue .item .name { font-weight: 600; }
+  .queue .item .meta { color: var(--muted); font-size: 12px; }
+  .queue .item .conf { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .queue .item .conf.high { color: var(--good); }
+  .queue .item .conf.mid  { color: var(--warn); }
+  .queue .item .conf.low  { color: var(--bad);  }
+
+  .detail { display: grid; grid-template-rows: auto 1fr auto; overflow: hidden; }
+  .detail .summary {
+    padding: 12px 18px; border-bottom: 1px solid var(--border); background: var(--panel);
+    display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 10px 18px;
+  }
+  .detail .field { display: flex; flex-direction: column; gap: 2px; }
+  .detail .field label { font-size: 11px; color: var(--muted); text-transform: uppercase; }
+  .detail .field input,
+  .detail .field select { padding: 6px 8px; font-size: 14px; }
+  .detail .preview { background: #2b2f36; overflow: hidden; }
+  .detail .preview iframe { border: 0; width: 100%; height: 100%; }
+  .detail .actions {
+    padding: 12px 18px; border-top: 1px solid var(--border); background: var(--panel);
+    display: flex; gap: 8px; justify-content: flex-end; align-items: center;
+  }
+  .detail .actions .audit { margin-right: auto; font-size: 12px; color: var(--muted); }
+  .detail .actions .audit summary { cursor: pointer; }
+  .detail .actions .audit pre { max-height: 220px; overflow: auto; background: #f7f8fb; padding: 8px; }
+
+  button {
+    border: 1px solid var(--border); background: var(--panel);
+    padding: 6px 12px; font-size: 13px; cursor: pointer; border-radius: 4px;
+  }
+  button:hover { background: var(--accent-soft); }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.primary:hover { filter: brightness(0.95); }
+  button.danger { background: var(--bad); color: #fff; border-color: var(--bad); }
+  button.danger:hover { filter: brightness(0.95); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .empty { padding: 40px; text-align: center; color: var(--muted); }
+  .toast {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    background: #1c2330; color: #fff; padding: 10px 16px; border-radius: 4px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.18); z-index: 100;
+  }
+  .toast.error { background: var(--bad); }
+  .patient-search-results {
+    border: 1px solid var(--border); background: var(--panel); max-height: 200px;
+    overflow-y: auto; position: absolute; z-index: 50; min-width: 280px;
+  }
+  .patient-search-results .row { padding: 6px 8px; cursor: pointer; }
+  .patient-search-results .row:hover { background: var(--accent-soft); }
+  .badge {
+    display: inline-block; padding: 1px 6px; border-radius: 3px;
+    background: #e1e7ef; color: #2c3947; font-size: 11px;
+  }
+  .badge.pending { background: #fef0e1; color: var(--warn); }
+  .badge.queued  { background: #e6efff; color: var(--accent); }
+  .badge.error   { background: #fde7e7; color: var(--bad); }
+  .badge.simulated_filed { background: #fff4d4; color: #7a5e00; }
+  .banner-disconnect {
+    background: #fff4d4; border-bottom: 2px solid #d4a300; color: #5a4400;
+    padding: 8px 18px; font-size: 13px; display: flex;
+    align-items: center; gap: 10px;
+  }
+  .banner-disconnect strong { color: #7a5e00; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Intake Review <span class="subtitle">Huntington Beach Dental Center</span></h1>
+  </div>
+  <div class="actions">
+    <button id="refresh">Refresh</button>
+  </div>
+</header>
+<div id="banner-disconnect" class="banner-disconnect" hidden>
+  <strong>SHADOW MODE — disconnected from Open Dental.</strong>
+  Confirm and Override clicks are recorded for accuracy comparison but
+  <strong>nothing is filed into OD</strong>. To enable real filing, unset
+  <code>INTAKE_DISCONNECT_OD</code> on the server and restart.
+</div>
+
+<main>
+  <section class="queue">
+    <div class="filters">
+      <label>Show:
+        <select id="status-filter">
+          <option value="queued,pending,error">All open</option>
+          <option value="queued">Queued</option>
+          <option value="pending">Pending</option>
+          <option value="error">Error</option>
+          <option value="filed,overridden,auto_filed">Filed (history)</option>
+          <option value="rejected">Rejected (history)</option>
+        </select>
+      </label>
+      <span id="queue-count" class="badge">0</span>
+    </div>
+    <div id="queue-list"></div>
+  </section>
+
+  <section class="detail" id="detail-empty">
+    <div class="empty">Select a queued item to review.</div>
+  </section>
+
+  <template id="detail-template">
+    <section class="detail">
+      <div class="summary">
+        <div class="field">
+          <label>Patient (suggested)</label>
+          <div style="position: relative;">
+            <input type="text" id="patient-input" autocomplete="off">
+            <div id="patient-results" class="patient-search-results" hidden></div>
+          </div>
+          <div class="meta">DOB extracted: <span id="extracted-dob">—</span> · OD label: <span id="patient-label">—</span></div>
+        </div>
+        <div class="field">
+          <label>DocCategory</label>
+          <select id="category-select"></select>
+          <div class="meta">Confidence: <span id="cat-conf">—</span></div>
+        </div>
+        <div class="field">
+          <label>Overall confidence</label>
+          <div id="overall-conf" style="font-size: 18px; font-weight: 600;">—</div>
+          <div class="meta">Pat <span id="pat-conf">—</span> · Cat <span id="cat-conf2">—</span> · Split <span id="split-conf">—</span></div>
+        </div>
+      </div>
+      <div class="preview">
+        <iframe id="pdf-preview"></iframe>
+      </div>
+      <div class="actions">
+        <details class="audit">
+          <summary>Audit log</summary>
+          <pre id="audit-log"></pre>
+        </details>
+        <button id="reject-btn" class="danger">Reject</button>
+        <button id="override-btn">File with overrides</button>
+        <button id="confirm-btn" class="primary">Confirm &amp; file</button>
+      </div>
+    </section>
+  </template>
+</main>
+
+<script>
+const $ = (sel, root = document) => root.querySelector(sel);
+const fmtConf = (v) => v == null ? "—" : (Math.round(v * 100) + "%");
+const confClass = (v) => {
+  if (v == null) return "low";
+  if (v >= 0.85) return "high";
+  if (v >= 0.5) return "mid";
+  return "low";
+};
+let categories = [];
+let appConfig = { disconnect_od: false };
+let currentItem = null;
+let patientSearchTimer = null;
+let chosenPatNum = null;
+
+async function loadConfig() {
+  try {
+    const r = await fetch("/intake/api/config");
+    if (r.ok) {
+      appConfig = await r.json();
+      $("#banner-disconnect").hidden = !appConfig.disconnect_od;
+    }
+  } catch (e) {
+    // Non-fatal — banner just won't show.
+  }
+}
+
+async function loadCategories() {
+  const r = await fetch("/intake/api/categories");
+  categories = await r.json();
+}
+
+async function loadQueue() {
+  const status = $("#status-filter").value;
+  const r = await fetch(`/intake/api/queue?status=${encodeURIComponent(status)}`);
+  const data = await r.json();
+  $("#queue-count").textContent = data.count;
+  const list = $("#queue-list");
+  list.innerHTML = "";
+  if (!data.items.length) {
+    list.innerHTML = `<div class="empty">No items in this view.</div>`;
+    return;
+  }
+  data.items.forEach((it) => {
+    const conf = confClass(it.overall_confidence);
+    const badge = `<span class="badge ${it.status}">${it.status}</span>`;
+    const div = document.createElement("div");
+    div.className = "item";
+    div.dataset.id = it.id;
+    div.innerHTML = `
+      <div>
+        <div class="name">${escapeHtml(it.suggested_pat_label || it.extracted_name || "(unknown patient)")}</div>
+        <div class="meta">${escapeHtml(it.suggested_category_od_name || it.suggested_category || "—")} · ${badge}
+          · pages ${(it.page_indices || []).length}</div>
+        <div class="meta" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+          ${escapeHtml(it.source_pdf || "")}
+        </div>
+      </div>
+      <div class="conf ${conf}">${fmtConf(it.overall_confidence)}</div>
+    `;
+    div.addEventListener("click", () => selectItem(it.id));
+    list.appendChild(div);
+  });
+}
+
+function escapeHtml(s) {
+  return String(s == null ? "" : s)
+    .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+}
+
+async function selectItem(id) {
+  document.querySelectorAll(".queue .item").forEach((el) =>
+    el.classList.toggle("selected", el.dataset.id == id)
+  );
+  const r = await fetch(`/intake/api/item/${id}`);
+  if (!r.ok) {
+    toast(`Failed to load item ${id}`, true);
+    return;
+  }
+  const data = await r.json();
+  currentItem = data.item;
+  chosenPatNum = currentItem.suggested_pat_num;
+
+  // Replace right-side panel.
+  const tpl = $("#detail-template").content.cloneNode(true);
+  const detail = tpl.querySelector(".detail");
+  $("#detail-empty").replaceWith(detail);
+
+  // Populate fields.
+  $("#patient-input", detail).value = currentItem.suggested_pat_label || currentItem.extracted_name || "";
+  $("#patient-label", detail).textContent = currentItem.suggested_pat_label || "—";
+  $("#extracted-dob", detail).textContent = currentItem.extracted_dob || "—";
+
+  const catSelect = $("#category-select", detail);
+  catSelect.innerHTML = "";
+  categories.forEach((c) => {
+    const o = document.createElement("option");
+    o.value = c.def_num;
+    o.textContent = `${c.od_name} (${c.short_label})`;
+    if (c.def_num === currentItem.suggested_def_num) o.selected = true;
+    catSelect.appendChild(o);
+  });
+  $("#cat-conf", detail).textContent = fmtConf(currentItem.category_confidence);
+  $("#cat-conf2", detail).textContent = fmtConf(currentItem.category_confidence);
+  $("#pat-conf", detail).textContent = fmtConf(currentItem.patient_confidence);
+  $("#split-conf", detail).textContent = fmtConf(currentItem.split_confidence);
+  $("#overall-conf", detail).textContent = fmtConf(currentItem.overall_confidence);
+  $("#overall-conf", detail).style.color =
+    `var(--${confClass(currentItem.overall_confidence) === "high" ? "good"
+        : confClass(currentItem.overall_confidence) === "mid" ? "warn" : "bad"})`;
+
+  $("#audit-log", detail).textContent = JSON.stringify(data.audit, null, 2);
+
+  $("#pdf-preview", detail).src = `/intake/api/item/${id}/pdf`;
+
+  // Patient search wiring
+  const patInput = $("#patient-input", detail);
+  const patResults = $("#patient-results", detail);
+  patInput.addEventListener("input", () => {
+    chosenPatNum = null;
+    clearTimeout(patientSearchTimer);
+    patientSearchTimer = setTimeout(() => runPatientSearch(patInput, patResults), 300);
+  });
+  document.addEventListener("click", (ev) => {
+    if (!patResults.contains(ev.target) && ev.target !== patInput) {
+      patResults.hidden = true;
+    }
+  });
+
+  // Buttons
+  $("#confirm-btn", detail).addEventListener("click", () => doConfirm(id));
+  $("#override-btn", detail).addEventListener("click", () => doOverride(id, catSelect));
+  $("#reject-btn", detail).addEventListener("click", () => doReject(id));
+}
+
+async function runPatientSearch(input, resultsEl) {
+  const q = input.value.trim();
+  if (q.length < 2) {
+    resultsEl.hidden = true;
+    return;
+  }
+  // Heuristic: if q contains a comma, parse as Last,First; else as a single
+  // surname (server tolerates partial).
+  let lname = q, fname = "";
+  if (q.includes(",")) {
+    const [a, b] = q.split(",");
+    lname = a.trim();
+    fname = b.trim();
+  } else if (q.includes(" ")) {
+    const parts = q.split(/\s+/);
+    fname = parts[0];
+    lname = parts[parts.length - 1];
+  }
+  const params = new URLSearchParams();
+  if (lname) params.set("lname", lname);
+  if (fname) params.set("fname", fname);
+  const r = await fetch(`/intake/api/patient-search?${params.toString()}`);
+  if (!r.ok) {
+    resultsEl.hidden = true;
+    return;
+  }
+  const { results } = await r.json();
+  resultsEl.innerHTML = "";
+  if (!results.length) {
+    resultsEl.innerHTML = `<div class="row" style="color:var(--muted)">no matches</div>`;
+  } else {
+    results.forEach((p) => {
+      const row = document.createElement("div");
+      row.className = "row";
+      row.textContent = `${p.label} · DOB ${p.birthdate || "—"}`;
+      row.addEventListener("click", () => {
+        chosenPatNum = p.pat_num;
+        input.value = p.label;
+        resultsEl.hidden = true;
+      });
+      resultsEl.appendChild(row);
+    });
+  }
+  resultsEl.hidden = false;
+}
+
+async function doConfirm(id) {
+  const promptText = appConfig.disconnect_od
+    ? "Record this filing for accuracy comparison? (Disconnected mode — nothing will actually be sent to OD.)"
+    : "File this document into OD with the suggested patient and category?";
+  if (!confirm(promptText)) return;
+  setButtonsDisabled(true);
+  try {
+    const r = await fetch(`/intake/api/item/${id}/confirm`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ actor: window.localStorage.getItem("intake_actor") || "" }),
+    });
+    const data = await r.json();
+    if (!r.ok || !data.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    toast(data.simulated
+      ? `Recorded (simulated — not sent to OD).`
+      : `Filed as DocNum ${data.doc_num}`);
+    await loadQueue();
+    showEmptyDetail();
+  } catch (e) {
+    toast(`Confirm failed: ${e.message}`, true);
+  } finally {
+    setButtonsDisabled(false);
+  }
+}
+
+async function doOverride(id, catSelect) {
+  const def_num = parseInt(catSelect.value, 10);
+  let pat_num = chosenPatNum || currentItem.suggested_pat_num;
+  if (!pat_num) {
+    toast("Pick a patient first.", true);
+    return;
+  }
+  const action = appConfig.disconnect_od
+    ? `Record patient #${pat_num} + category ${catSelect.options[catSelect.selectedIndex].text}? (Disconnected mode.)`
+    : `File with patient #${pat_num} and category ${catSelect.options[catSelect.selectedIndex].text}?`;
+  if (!confirm(action)) return;
+  setButtonsDisabled(true);
+  try {
+    const r = await fetch(`/intake/api/item/${id}/override`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        pat_num, def_num,
+        actor: window.localStorage.getItem("intake_actor") || "",
+      }),
+    });
+    const data = await r.json();
+    if (!r.ok || !data.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    toast(data.simulated
+      ? `Override recorded (simulated — not sent to OD).`
+      : `Filed (overridden) as DocNum ${data.doc_num}`);
+    await loadQueue();
+    showEmptyDetail();
+  } catch (e) {
+    toast(`Override failed: ${e.message}`, true);
+  } finally {
+    setButtonsDisabled(false);
+  }
+}
+
+async function doReject(id) {
+  const reason = prompt("Why reject this document? (e.g., 'wrong scan', 'duplicate')");
+  if (reason == null) return;
+  setButtonsDisabled(true);
+  try {
+    const r = await fetch(`/intake/api/item/${id}/reject`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        reason: reason.trim() || "rejected_by_staff",
+        actor: window.localStorage.getItem("intake_actor") || "",
+      }),
+    });
+    const data = await r.json();
+    if (!r.ok || !data.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    toast("Rejected.");
+    await loadQueue();
+    showEmptyDetail();
+  } catch (e) {
+    toast(`Reject failed: ${e.message}`, true);
+  } finally {
+    setButtonsDisabled(false);
+  }
+}
+
+function showEmptyDetail() {
+  const main = document.querySelector("main");
+  const old = main.querySelector(".detail");
+  if (old) {
+    const empty = document.createElement("section");
+    empty.id = "detail-empty";
+    empty.className = "detail";
+    empty.innerHTML = `<div class="empty">Select a queued item to review.</div>`;
+    old.replaceWith(empty);
+  }
+}
+
+function setButtonsDisabled(b) {
+  document.querySelectorAll(".detail .actions button").forEach((bt) => (bt.disabled = b));
+}
+
+function toast(msg, isError = false) {
+  const el = document.createElement("div");
+  el.className = "toast" + (isError ? " error" : "");
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 4000);
+}
+
+$("#refresh").addEventListener("click", loadQueue);
+$("#status-filter").addEventListener("change", loadQueue);
+
+(async () => {
+  await loadConfig();
+  await loadCategories();
+  await loadQueue();
+})();
+</script>
+</body>
+</html>
