@@ -62,8 +62,23 @@
   .detail .field label { font-size: 11px; color: var(--muted); text-transform: uppercase; }
   .detail .field input,
   .detail .field select { padding: 6px 8px; font-size: 14px; }
-  .detail .preview { background: #2b2f36; overflow: hidden; }
+  .detail .preview {
+    background: #2b2f36; overflow: hidden;
+    display: grid; grid-template-columns: 1fr 1fr;
+  }
   .detail .preview iframe { border: 0; width: 100%; height: 100%; }
+  .detail .preview .ocr-pane {
+    background: var(--panel); border-left: 1px solid var(--border);
+    overflow-y: auto; padding: 12px 14px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px; line-height: 1.45; white-space: pre-wrap;
+    color: #1c2330;
+  }
+  .detail .preview .ocr-pane .ocr-empty { color: var(--muted); font-style: italic; }
+  .detail .preview .ocr-pane .ocr-page-divider {
+    color: var(--muted); margin: 8px 0 4px; font-weight: 600;
+    border-bottom: 1px dashed var(--border); padding-bottom: 2px;
+  }
   .detail .actions {
     padding: 12px 18px; border-top: 1px solid var(--border); background: var(--panel);
     display: flex; gap: 8px; justify-content: flex-end; align-items: center;
@@ -174,6 +189,7 @@
       </div>
       <div class="preview">
         <iframe id="pdf-preview"></iframe>
+        <div id="ocr-pane" class="ocr-pane"></div>
       </div>
       <div class="actions">
         <details class="audit">
@@ -253,6 +269,54 @@ async function loadQueue() {
   });
 }
 
+function nextQueueIdAfter(currentId) {
+  // Capture the queue-item id that visually follows the currently-acted-on
+  // item, so we can auto-advance after Confirm/Override/Reject. Falls through
+  // to the previous sibling if the acted-on item was last in the list, and
+  // returns null if there's no other item.
+  const items = Array.from(document.querySelectorAll(".queue .item"));
+  const idx = items.findIndex((el) => String(el.dataset.id) === String(currentId));
+  if (idx < 0) return items.length ? items[0].dataset.id : null;
+  const next = items[idx + 1] || items[idx - 1];
+  return next ? next.dataset.id : null;
+}
+
+async function advanceTo(idOrNull) {
+  // Helper used after Confirm/Override/Reject. Reload queue, then either
+  // open the next remaining item or show the empty placeholder.
+  await loadQueue();
+  if (idOrNull == null) {
+    showEmptyDetail();
+    return;
+  }
+  // After reload the DOM is rebuilt — make sure that id still exists in the
+  // queue before selecting it.
+  const stillThere = document.querySelector(`.queue .item[data-id="${idOrNull}"]`);
+  if (stillThere) {
+    selectItem(idOrNull);
+  } else {
+    // The intended next was filtered out (e.g. status filter changed). Pick
+    // the first item still in view, otherwise empty.
+    const first = document.querySelector(".queue .item");
+    if (first) selectItem(first.dataset.id);
+    else showEmptyDetail();
+  }
+}
+
+function renderOcrPane(el, text) {
+  if (!text || !text.trim()) {
+    el.innerHTML = `<div class="ocr-empty">No cached OCR text for this candidate's pages. ` +
+      `Re-run intake processing on this PDF to populate the cache.</div>`;
+    return;
+  }
+  // The server returns text with "--- page N ---" dividers. Render them
+  // as styled headings so it's easy to scan multi-page candidates.
+  const safe = escapeHtml(text);
+  const html = safe.replace(/^--- page (\d+) ---$/gm,
+    '<div class="ocr-page-divider">Page $1</div>');
+  el.innerHTML = html;
+}
+
 function escapeHtml(s) {
   return String(s == null ? "" : s)
     .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
@@ -272,10 +336,21 @@ async function selectItem(id) {
   currentItem = data.item;
   chosenPatNum = currentItem.suggested_pat_num;
 
-  // Replace right-side panel.
+  // Replace right-side panel. Match the existing panel by .detail class —
+  // the original `#detail-empty` selector only worked once, since after the
+  // first selection the right pane no longer carries that id. That bug
+  // meant clicking another queued item silently failed; you could only
+  // advance after Confirm/Reject (which calls showEmptyDetail and restores
+  // the id). Now we replace whichever .detail is currently mounted.
   const tpl = $("#detail-template").content.cloneNode(true);
   const detail = tpl.querySelector(".detail");
-  $("#detail-empty").replaceWith(detail);
+  const main = document.querySelector("main");
+  const existing = main.querySelector(".detail");
+  if (existing) {
+    existing.replaceWith(detail);
+  } else {
+    main.appendChild(detail);
+  }
 
   // Populate fields.
   $("#patient-input", detail).value = currentItem.suggested_pat_label || currentItem.extracted_name || "";
@@ -303,6 +378,7 @@ async function selectItem(id) {
   $("#audit-log", detail).textContent = JSON.stringify(data.audit, null, 2);
 
   $("#pdf-preview", detail).src = `/intake/api/item/${id}/pdf`;
+  renderOcrPane($("#ocr-pane", detail), data.ocr_text);
 
   // Patient search wiring
   const patInput = $("#patient-input", detail);
@@ -371,10 +447,12 @@ async function runPatientSearch(input, resultsEl) {
 }
 
 async function doConfirm(id) {
-  const promptText = appConfig.disconnect_od
-    ? "Record this filing for accuracy comparison? (Disconnected mode — nothing will actually be sent to OD.)"
-    : "File this document into OD with the suggested patient and category?";
-  if (!confirm(promptText)) return;
+  // In disconnect mode the top banner already explains the no-write policy,
+  // so we skip the per-click confirm dialog. Real-OD writes still gate
+  // behind a confirm() because they're irreversible.
+  if (!appConfig.disconnect_od) {
+    if (!confirm("File this document into OD with the suggested patient and category?")) return;
+  }
   setButtonsDisabled(true);
   try {
     const r = await fetch(`/intake/api/item/${id}/confirm`, {
@@ -386,8 +464,8 @@ async function doConfirm(id) {
     toast(data.simulated
       ? `Recorded (simulated — not sent to OD).`
       : `Filed as DocNum ${data.doc_num}`);
-    await loadQueue();
-    showEmptyDetail();
+    const nextId = nextQueueIdAfter(id);
+    await advanceTo(nextId);
   } catch (e) {
     toast(`Confirm failed: ${e.message}`, true);
   } finally {
@@ -402,10 +480,11 @@ async function doOverride(id, catSelect) {
     toast("Pick a patient first.", true);
     return;
   }
-  const action = appConfig.disconnect_od
-    ? `Record patient #${pat_num} + category ${catSelect.options[catSelect.selectedIndex].text}? (Disconnected mode.)`
-    : `File with patient #${pat_num} and category ${catSelect.options[catSelect.selectedIndex].text}?`;
-  if (!confirm(action)) return;
+  if (!appConfig.disconnect_od) {
+    const action =
+      `File with patient #${pat_num} and category ${catSelect.options[catSelect.selectedIndex].text}?`;
+    if (!confirm(action)) return;
+  }
   setButtonsDisabled(true);
   try {
     const r = await fetch(`/intake/api/item/${id}/override`, {
@@ -420,8 +499,8 @@ async function doOverride(id, catSelect) {
     toast(data.simulated
       ? `Override recorded (simulated — not sent to OD).`
       : `Filed (overridden) as DocNum ${data.doc_num}`);
-    await loadQueue();
-    showEmptyDetail();
+    const nextId = nextQueueIdAfter(id);
+    await advanceTo(nextId);
   } catch (e) {
     toast(`Override failed: ${e.message}`, true);
   } finally {
@@ -444,8 +523,8 @@ async function doReject(id) {
     const data = await r.json();
     if (!r.ok || !data.ok) throw new Error(data.error || `HTTP ${r.status}`);
     toast("Rejected.");
-    await loadQueue();
-    showEmptyDetail();
+    const nextId = nextQueueIdAfter(id);
+    await advanceTo(nextId);
   } catch (e) {
     toast(`Reject failed: ${e.message}`, true);
   } finally {

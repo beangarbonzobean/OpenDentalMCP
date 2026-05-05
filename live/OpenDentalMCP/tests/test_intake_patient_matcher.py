@@ -58,16 +58,58 @@ def test_parse_name_first_last() -> None:
 
 
 def test_parse_name_with_middle() -> None:
-    assert pm.parse_name("Jane Marie Smith") == [("Smith", "Jane Marie")]
+    """Three-word "First Middle Last" tries both with and without the middle
+    so a form-vs-OD middle-name mismatch doesn't break the lookup."""
+    pairs = pm.parse_name("Jane Marie Smith")
+    assert ("Smith", "Jane Marie") in pairs
+    assert ("Smith", "Jane") in pairs  # middle dropped
 
 
 def test_parse_name_compound_lastname() -> None:
     """'Smith Jr., Jane' should detect Jr. as part of last name."""
-    assert pm.parse_name("Smith Jr., Jane") == [("Smith Jr.", "Jane")]
+    pairs = pm.parse_name("Smith Jr., Jane")
+    assert ("Smith Jr.", "Jane") in pairs
 
 
 def test_parse_name_apostrophe_preserved() -> None:
-    assert pm.parse_name("O'Brien, Sean") == [("O'Brien", "Sean")]
+    """Single-quote in O'Brien isn't a balanced quoted nickname, so it stays."""
+    pairs = pm.parse_name("O'Brien, Sean")
+    assert ("O'Brien", "Sean") in pairs
+
+
+def test_parse_name_strips_quoted_nickname() -> None:
+    """Balanced single-quoted nicknames are dropped before parsing."""
+    pairs = pm.parse_name("Milton, Dan 'Daniel' Ivanovich")
+    # Should parse as "Milton, Dan Ivanovich" plus the dropped-middle variant.
+    assert ("Milton", "Dan Ivanovich") in pairs
+    assert ("Milton", "Dan") in pairs
+
+
+def test_parse_name_strips_paren_nickname() -> None:
+    """Parenthetical nicknames are also dropped."""
+    pairs = pm.parse_name("Robert (Bobby) Smith")
+    # 3 words after stripping → "Robert Smith"
+    assert ("Smith", "Robert") in pairs
+
+
+def test_parse_name_compound_surname_with_prefix() -> None:
+    """OCR splitting "McLaughlin" as "MC LAUGHLIN" should still match.
+    Same goes for Mac/De/La/Van prefixes."""
+    pairs = pm.parse_name("MARCI MC LAUGHLIN")
+    assert ("MC LAUGHLIN", "MARCI") in pairs
+    # Without compound handling we'd have (LAUGHLIN, MARCI MC) which will not
+    # match "McLaughlin" because the want_first "MARCI MC" disagrees with
+    # OD's "Marci". The compound branch is what saves the lookup.
+
+
+def test_row_name_matches_ignores_internal_whitespace() -> None:
+    """'MC LAUGHLIN' should match OD's 'McLaughlin' after normalization."""
+    assert pm._row_name_matches(
+        {"LName": "McLaughlin", "FName": "Marci"}, "MC LAUGHLIN", "MARCI"
+    )
+    assert pm._row_name_matches(
+        {"LName": "Ginocchio-Nutto", "FName": "Joselyn"}, "Ginocchio Nutto", "Joselyn"
+    )
 
 
 def test_parse_name_single_word() -> None:
@@ -319,16 +361,57 @@ def test_starts_with_match_accepted() -> None:
     assert res.pat_num == 101
 
 
-def test_exact_lname_with_unrelated_fname_rejected() -> None:
-    """If LName matches but FName clearly doesn't, the row should be rejected
-    by the defensive check."""
+def test_exact_lname_with_unrelated_fname_falls_back_to_surname_only() -> None:
+    """If LName matches but FName clearly doesn't, the primary search rejects
+    the row (defensive check). The surname-only fallback then re-surfaces it
+    with confidence capped at 0.50 — useful when the form's first name is a
+    nickname/abbreviation/spelling-variant of OD's record. Confidence 0.50
+    stays well below the auto-file threshold so staff still review it."""
     def search(params: dict) -> list[dict]:
         return [{"PatNum": 999, "LName": "Smith", "FName": "Bob",
                  "Birthdate": "1970-01-01T00:00:00"}]
 
     res = pm.match_patient("Smith, Jane", None, search_patients=search)
-    assert res.pat_num is None
-    assert res.confidence == 0.0
+    assert res.pat_num == 999
+    assert res.confidence == 0.50
+    assert res.reason.startswith("surname_only_fallback:")
+
+
+def test_surname_only_not_used_when_primary_match_succeeds() -> None:
+    """If the primary (last+first) search hits, we never use the surname-only
+    fallback — the standard confidence stays at 0.85+."""
+    def search(params: dict) -> list[dict]:
+        if params.get("first_name") == "Jane":
+            return [{"PatNum": 101, "LName": "Smith", "FName": "Jane",
+                     "Birthdate": "1980-04-12T00:00:00"}]
+        return []
+    res = pm.match_patient("Smith, Jane", None, search_patients=search)
+    assert res.pat_num == 101
+    assert res.confidence >= 0.85
+    assert "surname_only_fallback" not in res.reason
+
+
+def test_surname_only_fallback_multiple_matches_low_conf() -> None:
+    """Surname-only fallback hitting multiple Smiths drops confidence further
+    via the existing 'multiple near top, no DOB' rule, then the surname-only
+    cap pins it at <= 0.50."""
+    def search(params: dict) -> list[dict]:
+        # Primary calls (last=Patel, first=Thakur) and (last=Thakur, first=Patel)
+        # both miss; surname-only "Patel" returns multiple.
+        if params.get("first_name"):
+            return []
+        if params.get("last_name") == "Patel":
+            return [
+                {"PatNum": 1, "LName": "Patel", "FName": "Thakorbhai",
+                 "Birthdate": "1960-01-01T00:00:00"},
+                {"PatNum": 2, "LName": "Patel", "FName": "Anita",
+                 "Birthdate": "1970-01-01T00:00:00"},
+            ]
+        return []
+    res = pm.match_patient("Thakur Patel", None, search_patients=search)
+    assert res.pat_num is not None
+    assert res.confidence <= 0.50
+    assert res.reason.startswith("surname_only_fallback:")
 
 
 def test_row_name_matches_helper() -> None:

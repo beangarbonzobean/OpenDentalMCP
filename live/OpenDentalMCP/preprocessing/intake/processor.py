@@ -357,6 +357,18 @@ def _default_ocr_pages(
             log.warning("ocr_pages: cache open failed, continuing without persist: %s", e)
             cache_enabled = False
 
+    # Warm up the local VLM. qwen2.5vl:7b on the GPU box reliably crashes with
+    # GGML_ASSERT on the first vision call after a cold load — sending a tiny
+    # dummy image first absorbs that failure here so real page 0 doesn't pay
+    # ~50s of failed retries before falling through to qwen3.5:9b. Skip for
+    # non-local backends since they don't have the cold-load issue.
+    if (os.environ.get("OCR_BACKEND", "haiku").lower() in ("local", "auto")
+            and os.environ.get("INTAKE_VLM_WARMUP", "true").lower() == "true"):
+        try:
+            ocr_helper.warmup_local_vlm()
+        except Exception as e:
+            log.warning("ocr_pages: warmup raised, continuing: %s", e)
+
     page_pngs = render_pdf_pages(pdf_bytes, dpi=150)
     pdf_name = Path(source_pdf_path).name if source_pdf_path else None
     out: list[str] = []

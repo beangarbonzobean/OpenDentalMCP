@@ -36,43 +36,99 @@ class MatchResult:
     candidates_considered: int = 0     # how many OD candidates we evaluated
 
 
+_NICKNAME_RE = re.compile(r"['\"\(\[][^'\"\)\]]+['\"\)\]]")
+
+
+def _strip_nicknames(s: str) -> str:
+    """Drop nicknames in quotes or parens before parsing.
+
+    Examples: "Dan 'Daniel' Milton"  -> "Dan Milton"
+              "Robert (Bobby) Smith" -> "Robert Smith"
+    Empties left behind by the strip are collapsed.
+    """
+    return re.sub(r"\s+", " ", _NICKNAME_RE.sub(" ", s)).strip()
+
+
 def parse_name(extracted: Optional[str]) -> list[tuple[str, str]]:
     """Parse the LLM-extracted name string into possible (LName, FName) pairs.
 
-    Returns at most two candidates:
-      - "Lastname, Firstname"   -> [(last, first)]
-      - "First Last"            -> [(last, first), (first, last)]  # try both
-      - "First Middle Last"     -> [(last, first), (last, "First Middle")]
+    Returns multiple candidates so the matcher can try several until one hits:
+      - "Lastname, Firstname"      -> [(last, first), (last, "")]
+      - "First Last"               -> [(last, first), (first, last), (last, "")]
+      - "First Middle Last"        -> [(last, first), (last, "first middle"),
+                                       (last, first_word_only), (last, "")]
+
+    A trailing surname-only candidate `(last, "")` is appended on every path so
+    the matcher can broaden the search when the first/middle name on the form
+    differs from what's in OD (nickname, abbreviation, spelling variant).
+
+    Nicknames in quotes/parens are stripped first so "Dan 'Daniel' Milton"
+    parses cleanly as "Dan Milton".
 
     Empty / None returns [].
     """
     if not extracted or not isinstance(extracted, str):
         return []
-    s = extracted.strip()
+    s = _strip_nicknames(extracted.strip())
     if not s:
         return []
 
-    # "Lastname, Firstname"
+    out: list[tuple[str, str]] = []
+
+    def _push(pair: tuple[str, str]) -> None:
+        if pair and pair not in out:
+            out.append(pair)
+
     if "," in s:
         last, _, first = s.partition(",")
         last = last.strip()
         first = first.strip()
         if last and first:
-            return [(last, first)]
+            _push((last, first))
+            # Also try surname + first word of given-name (drops middle name(s)).
+            first_only = first.split()[0] if first else ""
+            if first_only and first_only != first:
+                _push((last, first_only))
+        elif last:
+            _push((last, ""))
+        return out
 
-    # "First Last" or "First Middle Last"
     parts = [p for p in re.split(r"\s+", s) if p]
     if len(parts) == 1:
-        return [(parts[0], "")]
+        _push((parts[0], ""))
+        return out
     if len(parts) == 2:
         first, last = parts
-        return [(last, first), (first, last)]  # last-name-first ordering also possible
+        _push((last, first))
+        _push((first, last))  # ordering reversed (first-name-first or last-first ambiguity)
+        return out
     if len(parts) >= 3:
         last = parts[-1]
-        first = " ".join(parts[:-1])
-        return [(last, first)]
+        first_full = " ".join(parts[:-1])
+        first_only = parts[0]
+        _push((last, first_full))
+        if first_only != first_full:
+            _push((last, first_only))   # drop middle name(s)
+        # Compound surnames where the OCR/extractor inserted a space between
+        # the prefix and the root: "MARCI MC LAUGHLIN" -> "Mc Laughlin",
+        # "Maria DE LA ROSA" -> "De La Rosa". Try the prefix joined with the
+        # final word as a single surname so _row_name_matches' whitespace-
+        # flexible compare can hit "McLaughlin" / "DeLaRosa" in OD.
+        if parts[-2].lower() in _COMPOUND_SURNAME_PREFIXES:
+            compound_last = parts[-2] + " " + parts[-1]
+            compound_first_full = " ".join(parts[:-2])
+            _push((compound_last, compound_first_full))
+            if parts[0] != compound_first_full:
+                _push((compound_last, parts[0]))
+        return out
 
-    return []
+    return out
+
+
+_COMPOUND_SURNAME_PREFIXES = {
+    "mc", "mac", "o", "o'", "de", "del", "la", "le", "van", "von", "san", "st", "st.",
+    "der", "den", "ten", "ter",
+}
 
 
 def match_patient(
@@ -104,7 +160,7 @@ def match_patient(
     seen: list[dict] = []
     seen_pat_nums: set[int] = set()
 
-    for last, first in candidates:
+    def _try(last: str, first: str) -> None:
         # NOTE: tools._search_patients reads `last_name` / `first_name`
         # (snake_case) and translates them to OD's `LName`/`FName`. Calling
         # with the CamelCase keys gets silently dropped and OD returns ALL
@@ -116,7 +172,7 @@ def match_patient(
             raw = search_patients(params)
         except Exception as e:
             log.warning("matcher: search call failed for %r: %s", params, e)
-            continue
+            return
         rows = _coerce_rows(raw)
         for r in rows:
             try:
@@ -132,6 +188,27 @@ def match_patient(
                 continue
             seen_pat_nums.add(pn)
             seen.append(r)
+
+    for last, first in candidates:
+        _try(last, first)
+
+    # Surname-only fallback. Triggered only if every (last, first) attempt
+    # came back empty. Catches cases where the form's first name doesn't
+    # match what's in OD (nicknames, abbreviations, spelling variants):
+    # e.g. extracted "Thakur Patel" vs OD's "PATEL, THAKORBHAI". Confidence
+    # is capped below so these never auto-file — they always queue.
+    surname_only_used = False
+    if not seen:
+        tried_lasts: set[str] = set()
+        for last, _first in candidates:
+            key = _normalize_for_compare(last)
+            if not key or key in tried_lasts:
+                continue
+            tried_lasts.add(key)
+            before = len(seen)
+            _try(last, "")
+            if len(seen) > before:
+                surname_only_used = True
 
     if not seen:
         return MatchResult(
@@ -156,6 +233,13 @@ def match_patient(
     confidence, reason = _final_confidence(
         best_score, scored, extracted_dob, frag,
     )
+
+    # Surname-only matches are weak signals; cap below auto-file threshold
+    # and tag the reason so audit reviewers see why the row was queued.
+    if surname_only_used:
+        if confidence > 0.50:
+            confidence = 0.50
+        reason = f"surname_only_fallback:{reason}"
 
     return MatchResult(
         pat_num=pat_num,
@@ -277,29 +361,36 @@ def _format_label(row: dict) -> str:
     return f"{last}, {first} ({pat_num})"
 
 
+def _normalize_for_compare(s: str) -> str:
+    """Normalize a name field for comparison: lowercase + collapse internal
+    whitespace + strip non-alphanumerics. Lets "Mc Laughlin" match
+    "McLaughlin" and "O'Brian" match "Obrian"."""
+    if not s:
+        return ""
+    return re.sub(r"[^a-z0-9]", "", s.lower())
+
+
 def _row_name_matches(row: dict, want_last: str, want_first: str) -> bool:
     """Defensive: confirm the returned OD row matches the name we asked for.
 
-    Compares case-insensitive on the LName as a starts-with, and (if a first
-    name was supplied) requires the FName to also start with the requested
-    first. Whitespace is stripped because OD allows leading/trailing spaces
-    in the name fields ("' Sabou '").
-
-    This protects against a buggy API response that returns more rows than
-    requested — without it, an unfiltered all-patients dump would surface
-    arbitrary patients as "matches".
+    Comparison strips whitespace and non-alphanumerics on both sides so
+    "MC LAUGHLIN" matches "McLaughlin", "O'brian" matches "Obrian", etc.
+    For the first name, we accept either an exact normalized match or a
+    starts-with so that "Tanya" still matches "Tanya M." or just "T".
+    Empty want_first means we don't constrain the first-name side (used by
+    the surname-only fallback search).
     """
-    row_last = (row.get("LName") or "").strip().lower()
-    row_first = (row.get("FName") or "").strip().lower()
-    want_last_l = (want_last or "").strip().lower()
-    want_first_l = (want_first or "").strip().lower()
-    if not want_last_l:
+    row_last_n = _normalize_for_compare(row.get("LName") or "")
+    row_first_n = _normalize_for_compare(row.get("FName") or "")
+    want_last_n = _normalize_for_compare(want_last)
+    want_first_n = _normalize_for_compare(want_first)
+    if not want_last_n:
         return False
-    # Surname: case-insensitive equality (or starts-with for partial matches)
-    if row_last != want_last_l and not row_last.startswith(want_last_l):
+    if row_last_n != want_last_n and not row_last_n.startswith(want_last_n) \
+            and not want_last_n.startswith(row_last_n):
         return False
-    # First name: only enforce if we asked for one
-    if want_first_l:
-        if row_first != want_first_l and not row_first.startswith(want_first_l):
+    if want_first_n:
+        if row_first_n != want_first_n and not row_first_n.startswith(want_first_n) \
+                and not want_first_n.startswith(row_first_n):
             return False
     return True

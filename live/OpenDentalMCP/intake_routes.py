@@ -171,7 +171,44 @@ def api_item_detail(pending_id: int):
     return jsonify({
         "item": _pending_to_dict(row),
         "audit": audit,
+        "ocr_text": _ocr_text_for_pending(row),
     })
+
+
+def _ocr_text_for_pending(row) -> str:
+    """Concatenate the OCR text for this candidate's pages from
+    document_text_cache (intake_daytime rows). Returns "" for legacy items
+    that pre-date the cache write or whose pages aren't cached.
+    """
+    sha = getattr(row, "source_pdf_sha256", None)
+    pages = list(getattr(row, "page_indices", []) or [])
+    if not sha or not pages:
+        return ""
+    try:
+        from preprocessing import document_text_cache as dtc
+    except Exception:
+        return ""
+    placeholders = ",".join("?" * len(pages))
+    sql = (
+        "SELECT PageIndex, Text FROM doc_text "
+        "WHERE Source = 'intake_daytime' AND Sha256 = ? "
+        f"AND PageIndex IN ({placeholders}) "
+        "ORDER BY PageIndex"
+    )
+    try:
+        with dtc.open_cache() as conn:
+            cur = conn.execute(sql, (sha, *[int(p) for p in pages]))
+            rows = cur.fetchall()
+    except Exception as e:
+        log.warning("intake: ocr text lookup failed: %s", e)
+        return ""
+    if not rows:
+        return ""
+    parts = []
+    for r in rows:
+        parts.append(f"--- page {int(r['PageIndex']) + 1} ---")
+        parts.append((r["Text"] or "").rstrip())
+    return "\n".join(parts)
 
 
 @intake_bp.get("/api/item/<int:pending_id>/pdf")

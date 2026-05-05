@@ -475,6 +475,12 @@ def _ollama_ocr_call(
         "images": [b64],
         "stream": False,
         "options": {"temperature": 0.0},
+        # Ollama unloads idle models after ~5 min by default. The first vision
+        # call after a cold load consistently triggers a GGML_ASSERT in
+        # qwen2.5vl:7b on our box — and only on that first call. Long
+        # keep_alive amortizes the cold-load failure across the whole day so
+        # we don't pay the ~50s of failed attempts on every batch.
+        "keep_alive": os.environ.get("LOCAL_VLM_KEEP_ALIVE", "12h"),
     }
     url = f"{base_url}/api/generate"
     result = poster(url, body, timeout)
@@ -512,6 +518,60 @@ def _default_pdf_renderer(file_bytes: bytes, *, dpi: int) -> list[bytes]:
     """Real PDF renderer via preprocessing.pdf_render. Tests inject their own."""
     from preprocessing.pdf_render import render_pdf_pages
     return render_pdf_pages(file_bytes, dpi=dpi)
+
+
+# ---------------------------------------------------------------------------
+# Warmup
+# ---------------------------------------------------------------------------
+
+# A 16x16 fully-white PNG. Smallest input that still satisfies vision-model
+# patch alignment. Encoded inline so warmup has no filesystem dependency.
+_WARMUP_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAFklEQVR42mP8"
+    "////fwYGBgYmBgYGBgYAFL8C8HSH0AsAAAAASUVORK5CYII="
+)
+
+
+def warmup_local_vlm(
+    *,
+    model: Optional[str] = None,
+    base_url: Optional[str] = None,
+    timeout: int = 90,
+    max_attempts: int = 3,
+    http_post=None,
+) -> tuple[bool, Optional[str]]:
+    """Send a tiny dummy image to the local VLM so the cold-load failure
+    (GGML_ASSERT on qwen2.5vl's first call after model load) gets absorbed
+    here instead of wasting time on a real page.
+
+    Returns (ok, error_message). ok=True if any attempt succeeded; ok=False if
+    every attempt raised. Either way the caller can proceed — a False return
+    just signals "the warmup didn't help, expect the real first page may still
+    fail and fall through to the fallback model".
+    """
+    base = (base_url or os.environ.get("LOCAL_VLM_BASE_URL", LOCAL_BASE_URL_DEFAULT)).rstrip("/")
+    primary = model or os.environ.get("LOCAL_VLM_PRIMARY", LOCAL_PRIMARY_DEFAULT)
+    poster = http_post if http_post is not None else _default_ollama_post
+
+    img_bytes = base64.b64decode(_WARMUP_PNG_B64)
+    last_err: Optional[str] = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            text, _, _ = _ollama_ocr_call(
+                img_bytes,
+                model=primary, base_url=base, timeout=timeout,
+                prompt="Reply with 'ok'.",
+                poster=poster,
+            )
+            log.info("warmup_local_vlm: %s ready (attempt %d)", primary, attempt)
+            return True, None
+        except Exception as e:
+            last_err = f"{type(e).__name__}: {e}"
+            log.warning("warmup_local_vlm: %s attempt %d failed: %s",
+                        primary, attempt, last_err)
+    log.warning("warmup_local_vlm: %s did not warm up after %d attempts; "
+                "real pages may need fallback model", primary, max_attempts)
+    return False, last_err
 
 
 # ---------------------------------------------------------------------------
