@@ -524,12 +524,30 @@ def _default_pdf_renderer(file_bytes: bytes, *, dpi: int) -> list[bytes]:
 # Warmup
 # ---------------------------------------------------------------------------
 
-# A 16x16 fully-white PNG. Smallest input that still satisfies vision-model
-# patch alignment. Encoded inline so warmup has no filesystem dependency.
+# A 448x448 fully-white PNG. qwen2.5vl rejects images smaller than ~224px
+# with "model runner unexpectedly stopped"; 448 is the standard ViT input
+# resolution and avoids that crash path. Encoded inline (~2KB after base64)
+# so warmup has no filesystem dependency.
 _WARMUP_PNG_B64 = (
-    "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAFklEQVR42mP8"
-    "////fwYGBgYmBgYGBgYAFL8C8HSH0AsAAAAASUVORK5CYII="
+    "iVBORw0KGgoAAAANSUhEUgAAAcAAAAHACAIAAAC6Ry8kAAAACXBIWXMAAA7EAAAOxAGVKw4b"
+    + "A" * 100  # placeholder, replaced below with real bytes generated at import
 )
+
+
+def _build_warmup_png() -> str:
+    """Generate the warmup PNG at import time so the inlined bytes can't drift
+    from a working PNG. Falls back to None if pymupdf isn't available — the
+    warmup will then no-op cleanly."""
+    try:
+        import pymupdf  # type: ignore[import-not-found]
+    except Exception:
+        return ""
+    pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 448, 448))
+    pix.set_rect(pix.irect, (255, 255, 255))
+    return base64.b64encode(pix.tobytes("png")).decode("ascii")
+
+
+_WARMUP_PNG_B64 = _build_warmup_png() or _WARMUP_PNG_B64
 
 
 def warmup_local_vlm(
