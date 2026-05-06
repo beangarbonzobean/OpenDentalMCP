@@ -39,6 +39,18 @@ class MatchResult:
 _NICKNAME_RE = re.compile(r"['\"\(\[][^'\"\)\]]+['\"\)\]]")
 
 
+# Suffix tokens that should be folded into the previous word as part of the
+# surname rather than treated as the surname itself. Lowercased keys; we
+# match case-insensitively and tolerate trailing periods.
+_NAME_SUFFIXES = {
+    "jr", "sr", "ii", "iii", "iv", "v", "2nd", "3rd", "4th",
+}
+
+
+def _is_suffix(token: str) -> bool:
+    return token.strip(" .").lower() in _NAME_SUFFIXES
+
+
 def _strip_nicknames(s: str) -> str:
     """Drop nicknames in quotes or parens before parsing.
 
@@ -94,13 +106,27 @@ def parse_name(extracted: Optional[str]) -> list[tuple[str, str]]:
         return out
 
     parts = [p for p in re.split(r"\s+", s) if p]
+    # Fold a trailing generational suffix (Jr., Sr., II, III, ...) into the
+    # previous token so "KEITH LOUTON JR." becomes ["KEITH", "LOUTON JR."].
+    # OD typically stores the suffix as part of the surname. Track this so
+    # we know the ordering is unambiguous (the suffix-bearing word is the
+    # surname) and skip the (first, last) swap below.
+    suffix_detected = False
+    if len(parts) >= 2 and _is_suffix(parts[-1]):
+        parts = parts[:-2] + [parts[-2] + " " + parts[-1]]
+        suffix_detected = True
     if len(parts) == 1:
         _push((parts[0], ""))
         return out
     if len(parts) == 2:
         first, last = parts
         _push((last, first))
-        _push((first, last))  # ordering reversed (first-name-first or last-first ambiguity)
+        if not suffix_detected:
+            # Without a suffix, "First Last" is ambiguous (could be ordered
+            # the other way). With a suffix the surname is unambiguous, so
+            # don't emit the swap — it would send the surname-only fallback
+            # chasing patients with the *first* name as a surname.
+            _push((first, last))
         return out
     if len(parts) >= 3:
         last = parts[-1]
@@ -160,7 +186,7 @@ def match_patient(
     seen: list[dict] = []
     seen_pat_nums: set[int] = set()
 
-    def _try(last: str, first: str) -> None:
+    def _try(last: str, first: str, *, strict: bool = False) -> None:
         # NOTE: tools._search_patients reads `last_name` / `first_name`
         # (snake_case) and translates them to OD's `LName`/`FName`. Calling
         # with the CamelCase keys gets silently dropped and OD returns ALL
@@ -184,7 +210,7 @@ def match_patient(
             # Defensive: require the returned row's name to actually match
             # the search terms (case-insensitive). Even if the API silently
             # drops a filter, the matcher won't surface an unrelated patient.
-            if not _row_name_matches(r, last, first):
+            if not _row_name_matches(r, last, first, strict=strict):
                 continue
             seen_pat_nums.add(pn)
             seen.append(r)
@@ -196,7 +222,9 @@ def match_patient(
     # came back empty. Catches cases where the form's first name doesn't
     # match what's in OD (nicknames, abbreviations, spelling variants):
     # e.g. extracted "Thakur Patel" vs OD's "PATEL, THAKORBHAI". Confidence
-    # is capped below so these never auto-file — they always queue.
+    # is capped below so these never auto-file — they always queue. Uses
+    # strict=True on _row_name_matches so a search for surname "Robert"
+    # doesn't match OD's LName="Roberto" via prefix.
     surname_only_used = False
     if not seen:
         tried_lasts: set[str] = set()
@@ -206,7 +234,7 @@ def match_patient(
                 continue
             tried_lasts.add(key)
             before = len(seen)
-            _try(last, "")
+            _try(last, "", strict=True)
             if len(seen) > before:
                 surname_only_used = True
 
@@ -240,6 +268,36 @@ def match_patient(
         if confidence > 0.50:
             confidence = 0.50
         reason = f"surname_only_fallback:{reason}"
+
+    # Surname-collision check: even when we got exactly one match in the
+    # primary search and returned a confident 0.85, OD may simply not have
+    # surfaced the second patient with that name in the (last+first) query
+    # — e.g. "Shu Chen" returned only PatNum 82 but the actual patient
+    # 22313 was a separate Shu Chen the search missed. When we have no DOB
+    # to verify with, downgrade single-hit name matches to 0.70 if more
+    # than one OD record shares the surname. That keeps these in the
+    # review queue rather than auto-filing the wrong record.
+    if (
+        not surname_only_used
+        and not extracted_dob
+        and confidence >= 0.85
+        and len(seen) == 1
+    ):
+        surname_for_check = (best.get("LName") or "").strip()
+        if surname_for_check:
+            try:
+                raw_all = search_patients({"last_name": surname_for_check})
+                all_rows = _coerce_rows(raw_all)
+                count_strict = sum(
+                    1 for r in all_rows
+                    if _row_name_matches(r, surname_for_check, "", strict=True)
+                )
+            except Exception as e:
+                log.warning("matcher: surname collision check failed: %s", e)
+                count_strict = 1
+            if count_strict > 1:
+                confidence = 0.70
+                reason = f"surname_collision_no_dob:{reason}:siblings={count_strict}"
 
     return MatchResult(
         pat_num=pat_num,
@@ -370,7 +428,9 @@ def _normalize_for_compare(s: str) -> str:
     return re.sub(r"[^a-z0-9]", "", s.lower())
 
 
-def _row_name_matches(row: dict, want_last: str, want_first: str) -> bool:
+def _row_name_matches(
+    row: dict, want_last: str, want_first: str, *, strict: bool = False,
+) -> bool:
     """Defensive: confirm the returned OD row matches the name we asked for.
 
     Comparison strips whitespace and non-alphanumerics on both sides so
@@ -379,6 +439,13 @@ def _row_name_matches(row: dict, want_last: str, want_first: str) -> bool:
     starts-with so that "Tanya" still matches "Tanya M." or just "T".
     Empty want_first means we don't constrain the first-name side (used by
     the surname-only fallback search).
+
+    `strict=True` requires *exact* normalized equality on the surname (no
+    prefix in either direction). The surname-only fallback uses this to
+    avoid false-positive cross-field matches — e.g. searching for surname
+    "Robert" must not match an OD record where LName="ROBERTO". Prefix-
+    flexibility is preserved on first names (and on surnames in non-strict
+    mode) so OCR truncations and middle-initial trailers still work.
     """
     row_last_n = _normalize_for_compare(row.get("LName") or "")
     row_first_n = _normalize_for_compare(row.get("FName") or "")
@@ -386,9 +453,13 @@ def _row_name_matches(row: dict, want_last: str, want_first: str) -> bool:
     want_first_n = _normalize_for_compare(want_first)
     if not want_last_n:
         return False
-    if row_last_n != want_last_n and not row_last_n.startswith(want_last_n) \
-            and not want_last_n.startswith(row_last_n):
-        return False
+    if strict:
+        if row_last_n != want_last_n:
+            return False
+    else:
+        if row_last_n != want_last_n and not row_last_n.startswith(want_last_n) \
+                and not want_last_n.startswith(row_last_n):
+            return False
     if want_first_n:
         if row_first_n != want_first_n and not row_first_n.startswith(want_first_n) \
                 and not want_first_n.startswith(row_first_n):

@@ -53,6 +53,26 @@ Schema:
 }
 
 Rules:
+- The PATIENT NAME is the most prominent name in the upper-left header
+  area of the page, usually printed in large/bold text right under the
+  form title (e.g., "Routing Slip" or "Consent for Dental Treatment").
+- IGNORE STAFF NAMES. Lines that label staff are NOT the patient. Treat
+  these as staff and skip them, even if a name follows on the same line:
+    * "DOC-", "DOCB-", "DOCA-" (doctor)
+    * "GEORG-", "SOPH-", "TUYN-", "VO-", "ASSIST-", "HYG-" (hygienist or
+      assistant; the prefix is the first 4-6 letters of their first name)
+    * "Dr. Name", "Provider:", "Hygienist:", "Assistant:"
+  Example: a line "DOCB- YOUNG, BEN" identifies Dr. Ben Young — that is
+  the doctor, not the patient. The patient name will be elsewhere on the
+  page (typically the bold header at the top).
+- FALLBACK: if the OCR didn't pick up the prominent header name (it can
+  fail on bold or stylized headers), look for "Subscriber:" under
+  Primary/Secondary Insurance — on adult patients the subscriber is
+  typically the patient. Only use this fallback when no other patient-
+  shaped name is visible in the page body. Note: for minors, the
+  subscriber is usually a parent — if Age looks under 18, prefer null
+  over an insurance-subscriber name unless the subscriber name clearly
+  matches a name elsewhere in the body.
 - If the page shows multiple names (e.g., subscriber + dependent on insurance card),
   pick the patient (the one being treated) — usually the dependent if names differ.
 - DOB formats vary: 04/12/1980, 4-12-80, April 12 1980. Convert all to YYYY-MM-DD.

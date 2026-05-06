@@ -92,6 +92,37 @@ def test_parse_name_strips_paren_nickname() -> None:
     assert ("Smith", "Robert") in pairs
 
 
+def test_parse_name_handles_jr_suffix() -> None:
+    """A trailing Jr./Sr./II suffix gets folded into the surname, not used
+    as the surname itself. Caught the bug where 'KEITH LOUTON JR.' parsed
+    as last='JR.' and never matched anything in OD."""
+    pairs = pm.parse_name("KEITH LOUTON JR.")
+    assert ("LOUTON JR.", "KEITH") in pairs
+    # And don't surface 'JR.' as a candidate surname.
+    assert all(last.strip(" .").lower() != "jr" for last, _ in pairs)
+
+    pairs2 = pm.parse_name("Robert Williams III")
+    assert ("Williams III", "Robert") in pairs2
+
+    # Comma form with suffix appended after surname.
+    pairs3 = pm.parse_name("LOUTON JR., KEITH")
+    assert ("LOUTON JR.", "KEITH") in pairs3
+
+
+def test_strict_surname_match_rejects_prefix() -> None:
+    """In strict mode (used by the surname-only fallback) a search for
+    'Robert' must NOT match an OD record where LName='Roberto'. Caught
+    the false-positive where 'Robert Stelmaun' matched 'ROBERTO, RUIZ'."""
+    rm = pm._row_name_matches
+    # Non-strict (primary search) keeps prefix flexibility for OCR
+    # truncation: "Robert" still matches "Roberto".
+    assert rm({"LName": "Roberto", "FName": "Ruiz"}, "Robert", "") is True
+    # Strict (surname-only fallback) requires exact normalized equality.
+    assert rm({"LName": "Roberto", "FName": "Ruiz"}, "Robert", "", strict=True) is False
+    # Whitespace/case still normalized in strict mode.
+    assert rm({"LName": "McLaughlin", "FName": "Marci"}, "MC LAUGHLIN", "", strict=True) is True
+
+
 def test_parse_name_compound_surname_with_prefix() -> None:
     """OCR splitting "McLaughlin" as "MC LAUGHLIN" should still match.
     Same goes for Mac/De/La/Van prefixes."""
@@ -389,6 +420,45 @@ def test_surname_only_not_used_when_primary_match_succeeds() -> None:
     assert res.pat_num == 101
     assert res.confidence >= 0.85
     assert "surname_only_fallback" not in res.reason
+
+
+def test_surname_collision_downgrades_single_match_with_no_dob() -> None:
+    """Even when (last, first) returns exactly one match, if multiple OD
+    records share the surname AND we have no DOB to verify, downgrade
+    confidence from 0.85 to 0.70 so the row still queues. Caught the case
+    where 'Shu Chen' matched the wrong PatNum 82 because OD had two Shu
+    Chens but the search only surfaced one."""
+    def search(params: dict) -> list[dict]:
+        last = params.get("last_name", "")
+        first = params.get("first_name", "")
+        if last == "Chen" and first == "Shu":
+            return [{"PatNum": 82, "LName": "Chen", "FName": "Shu-Jung Pearl",
+                     "Birthdate": "1960-01-01T00:00:00"}]
+        if last == "Chen" and not first:
+            # All Chens — the collision check sees both.
+            return [
+                {"PatNum": 82, "LName": "Chen", "FName": "Shu-Jung Pearl",
+                 "Birthdate": "1960-01-01T00:00:00"},
+                {"PatNum": 22313, "LName": "Chen", "FName": "Shu",
+                 "Birthdate": "1990-04-01T00:00:00"},
+            ]
+        return []
+    res = pm.match_patient("Chen, Shu", None, search_patients=search)
+    assert res.pat_num == 82  # we still pick the single primary hit
+    assert res.confidence == 0.70  # but downgrade because >1 Chen exists
+    assert res.reason.startswith("surname_collision_no_dob:")
+
+
+def test_surname_collision_does_not_fire_when_dob_present() -> None:
+    """Collision check is skipped when DOB is available — the DOB is
+    already a strong disambiguator."""
+    def search(params: dict) -> list[dict]:
+        if params.get("last_name") == "Chen":
+            return [{"PatNum": 82, "LName": "Chen", "FName": "Shu",
+                     "Birthdate": "1960-01-01T00:00:00"}]
+        return []
+    res = pm.match_patient("Chen, Shu", "1960-01-01", search_patients=search)
+    assert res.confidence == 1.0  # exact name+dob match
 
 
 def test_surname_only_fallback_multiple_matches_low_conf() -> None:
