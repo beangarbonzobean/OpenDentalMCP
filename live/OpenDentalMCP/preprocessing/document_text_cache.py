@@ -57,6 +57,14 @@ class DocTextRow:
     Reviewed: int = 0
     ReviewedAt: Optional[str] = None
     ReviewedBy: Optional[str] = None
+    # Source/page tracking. od_backfill rows come from the nightly historical-doc
+    # OCR pipeline and resolve their on-disk file via the OD patient-folder
+    # convention. intake_daytime rows come from the same-day batch-scan intake
+    # processor; they aren't in OD yet, so SourcePdfPath points at the original
+    # batch PDF on the share and PageIndex selects which page within it.
+    Source: str = "od_backfill"
+    SourcePdfPath: Optional[str] = None
+    PageIndex: Optional[int] = None
 
 
 @dataclass
@@ -86,9 +94,13 @@ CREATE TABLE IF NOT EXISTS doc_text (
     CostUsd       REAL,
     Reviewed      INTEGER NOT NULL DEFAULT 0,
     ReviewedAt    TEXT,
-    ReviewedBy    TEXT
+    ReviewedBy    TEXT,
+    Source        TEXT NOT NULL DEFAULT 'od_backfill',
+    SourcePdfPath TEXT,
+    PageIndex     INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_doc_text_pat ON doc_text(PatNum);
+CREATE INDEX IF NOT EXISTS idx_doc_text_sha ON doc_text(Sha256) WHERE Sha256 IS NOT NULL;
 -- Indexes on Reviewed and OcrAt are created in _migrate_add_review_columns
 -- so they don't fire on legacy DBs that don't yet have those columns.
 
@@ -159,9 +171,25 @@ def _migrate_add_review_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE doc_text ADD COLUMN ReviewedAt TEXT")
     if "ReviewedBy" not in have:
         conn.execute("ALTER TABLE doc_text ADD COLUMN ReviewedBy TEXT")
+    if "Source" not in have:
+        conn.execute(
+            "ALTER TABLE doc_text ADD COLUMN Source TEXT NOT NULL DEFAULT 'od_backfill'"
+        )
+    if "SourcePdfPath" not in have:
+        conn.execute("ALTER TABLE doc_text ADD COLUMN SourcePdfPath TEXT")
+    if "PageIndex" not in have:
+        conn.execute("ALTER TABLE doc_text ADD COLUMN PageIndex INTEGER")
     # Also ensure the new indexes exist on legacy DBs.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_doc_text_ocr_at   ON doc_text(OcrAt)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_doc_text_reviewed ON doc_text(Reviewed)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_doc_text_source   ON doc_text(Source)")
+    # Sha256 index powers the dedup fast-path in ocr_one_document — same file
+    # bytes across patients (form templates, reused consents) reuse the cached
+    # text instead of re-OCRing.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_doc_text_sha "
+        "ON doc_text(Sha256) WHERE Sha256 IS NOT NULL"
+    )
 
 
 @contextmanager
@@ -180,6 +208,37 @@ def get_text(conn: sqlite3.Connection, doc_num: int) -> Optional[DocTextRow]:
     cur = conn.execute(
         "SELECT * FROM doc_text WHERE DocNum = ?",
         (int(doc_num),),
+    )
+    r = cur.fetchone()
+    if not r:
+        return None
+    return _row_to_dataclass(r)
+
+
+def find_ok_by_sha256(
+    conn: sqlite3.Connection,
+    sha256: str,
+    *,
+    min_text_chars: int = 1,
+) -> Optional[DocTextRow]:
+    """Return the oldest (smallest DocNum) Status='ok' row matching this SHA.
+
+    Used by the dedup fast-path in ocr_one_document — when the same file bytes
+    appear under multiple DocNums (e.g. a consent template scanned for many
+    patients) the new doc reuses the cached text instead of re-OCRing.
+
+    `min_text_chars` lets the caller require a minimum non-trivial text length
+    so we don't propagate previously-bad cached results. Default 1 (any non-
+    empty Text qualifies; the MIN_OK_CHARS floor in ocr_one_document already
+    guarantees ok rows have substantive text, so 1 is a safe lower bound).
+    """
+    if not sha256:
+        return None
+    cur = conn.execute(
+        "SELECT * FROM doc_text "
+        "WHERE Sha256 = ? AND Status = 'ok' AND length(Text) >= ? "
+        "ORDER BY DocNum LIMIT 1",
+        (sha256, int(min_text_chars)),
     )
     r = cur.fetchone()
     if not r:
@@ -239,8 +298,9 @@ def put_text(conn: sqlite3.Connection, row: DocTextRow) -> None:
         INSERT INTO doc_text
             (DocNum, PatNum, FileName, DocCategory, DateCreated, Text,
              PageCount, Sha256, OcrModel, OcrAt, Status, ErrorMessage, CostUsd,
-             Reviewed, ReviewedAt, ReviewedBy)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             Reviewed, ReviewedAt, ReviewedBy,
+             Source, SourcePdfPath, PageIndex)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(DocNum) DO UPDATE SET
             PatNum=excluded.PatNum,
             FileName=excluded.FileName,
@@ -256,16 +316,88 @@ def put_text(conn: sqlite3.Connection, row: DocTextRow) -> None:
             CostUsd=excluded.CostUsd,
             Reviewed=0,
             ReviewedAt=NULL,
-            ReviewedBy=NULL
+            ReviewedBy=NULL,
+            Source=excluded.Source,
+            SourcePdfPath=excluded.SourcePdfPath,
+            PageIndex=excluded.PageIndex
         """,
         (
             int(row.DocNum), int(row.PatNum), row.FileName, row.DocCategory,
             row.DateCreated, row.Text, row.PageCount, row.Sha256,
             row.OcrModel, row.OcrAt, row.Status, row.ErrorMessage, row.CostUsd,
             int(row.Reviewed or 0), row.ReviewedAt, row.ReviewedBy,
+            row.Source or "od_backfill", row.SourcePdfPath, row.PageIndex,
         ),
     )
     conn.commit()
+
+
+def put_intake_page_text(
+    conn: sqlite3.Connection,
+    *,
+    source_pdf_sha256: str,
+    page_index: int,
+    source_pdf_path: str,
+    pat_num: Optional[int],
+    file_name: Optional[str],
+    text: str,
+    page_count_in_source: Optional[int],
+    ocr_model: Optional[str],
+    status: str = "ok",
+    error_message: Optional[str] = None,
+    cost_usd: Optional[float] = None,
+) -> int:
+    """Insert (or update) an intake-batch per-page OCR row. Returns the synthetic
+    DocNum allocated.
+
+    Identity is (Source='intake_daytime', Sha256=<source pdf sha>, PageIndex).
+    Re-running the intake processor on the same PDF (only possible if the
+    intake_processed_pdfs row is removed) updates in place rather than
+    duplicating rows.
+
+    PatNum=0 is used when the intake matcher has no patient yet — real OD
+    PatNums start at 1.
+    """
+    if status not in VALID_STATUS:
+        raise ValueError(f"invalid status: {status!r}")
+
+    # Look up existing row by (Source, Sha256, PageIndex). If it exists,
+    # reuse its DocNum so we update rather than allocate a new negative.
+    cur = conn.execute(
+        "SELECT DocNum FROM doc_text "
+        "WHERE Source = 'intake_daytime' AND Sha256 = ? AND PageIndex = ?",
+        (source_pdf_sha256, int(page_index)),
+    )
+    existing = cur.fetchone()
+    if existing is not None:
+        doc_num = int(existing["DocNum"])
+    else:
+        # Allocate a fresh synthetic DocNum below the current minimum.
+        # Real OD DocNums are positive; intake rows live in (-inf, 0).
+        cur = conn.execute("SELECT COALESCE(MIN(DocNum), 0) FROM doc_text")
+        cur_min = int(cur.fetchone()[0] or 0)
+        doc_num = min(-1, cur_min - 1)
+
+    row = DocTextRow(
+        DocNum=doc_num,
+        PatNum=int(pat_num) if pat_num else 0,
+        FileName=file_name,
+        DocCategory=None,
+        DateCreated=None,
+        Text=text or "",
+        PageCount=page_count_in_source,
+        Sha256=source_pdf_sha256,
+        OcrModel=ocr_model,
+        OcrAt=datetime.now(timezone.utc).isoformat(),
+        Status=status,
+        ErrorMessage=error_message,
+        CostUsd=cost_usd,
+        Source="intake_daytime",
+        SourcePdfPath=source_pdf_path,
+        PageIndex=int(page_index),
+    )
+    put_text(conn, row)
+    return doc_num
 
 
 def mark_reviewed(
@@ -317,13 +449,14 @@ def list_recent_docs(
     only_unreviewed: bool = True,
     status_in: Optional[List[str]] = None,
     doc_category: Optional[int] = None,
+    source_in: Optional[List[str]] = None,
     limit: int = 200,
     offset: int = 0,
 ) -> List[DocTextRow]:
     """Recent OCR'd docs for the review UI.
 
     Default: rows OCR'd in the last 7 days that haven't been reviewed yet.
-    Filterable by status, category, recency.
+    Filterable by status, category, source, recency.
     """
     if since_iso is None:
         since_dt = datetime.now(timezone.utc) - timedelta(days=7)
@@ -339,6 +472,10 @@ def list_recent_docs(
     if doc_category is not None:
         base += " AND DocCategory = ?"
         params.append(int(doc_category))
+    if source_in:
+        placeholders = ",".join("?" * len(source_in))
+        base += f" AND Source IN ({placeholders})"
+        params.extend(source_in)
     base += " ORDER BY OcrAt DESC, DocNum DESC LIMIT ? OFFSET ?"
     params.extend([int(limit), int(offset)])
     return [_row_to_dataclass(r) for r in conn.execute(base, params).fetchall()]
@@ -382,7 +519,13 @@ def review_summary(
 
 
 def prune_orphans(conn: sqlite3.Connection, known_doc_nums: Iterable[int]) -> int:
-    """Delete cache rows whose DocNum is not in known_doc_nums. Returns deleted count."""
+    """Delete cache rows whose DocNum is not in known_doc_nums. Returns deleted count.
+
+    Scoped to Source='od_backfill' rows — intake_daytime rows have synthetic
+    negative DocNums that don't correspond to OD's document table, so the
+    nightly backfill's "known DocNums from OD" list never contains them and
+    they would otherwise be wiped on every prune.
+    """
     known_set = {int(x) for x in known_doc_nums}
     if not known_set:
         # Defensive: refuse to nuke the whole cache on an empty input.
@@ -392,7 +535,9 @@ def prune_orphans(conn: sqlite3.Connection, known_doc_nums: Iterable[int]) -> in
     conn.execute("DELETE FROM _known")
     conn.executemany("INSERT OR IGNORE INTO _known(n) VALUES (?)", [(n,) for n in known_set])
     cur = conn.execute(
-        "DELETE FROM doc_text WHERE DocNum NOT IN (SELECT n FROM _known)"
+        "DELETE FROM doc_text "
+        "WHERE Source = 'od_backfill' "
+        "AND DocNum NOT IN (SELECT n FROM _known)"
     )
     conn.commit()
     deleted = cur.rowcount or 0
@@ -469,6 +614,7 @@ def search(
 # ---------------------------------------------------------------------------
 
 def _row_to_dataclass(r: sqlite3.Row) -> DocTextRow:
+    keys = r.keys()
     return DocTextRow(
         DocNum=int(r["DocNum"]),
         PatNum=int(r["PatNum"]),
@@ -483,7 +629,10 @@ def _row_to_dataclass(r: sqlite3.Row) -> DocTextRow:
         Status=r["Status"],
         ErrorMessage=r["ErrorMessage"],
         CostUsd=r["CostUsd"],
-        Reviewed=int(r["Reviewed"]) if "Reviewed" in r.keys() else 0,
-        ReviewedAt=r["ReviewedAt"] if "ReviewedAt" in r.keys() else None,
-        ReviewedBy=r["ReviewedBy"] if "ReviewedBy" in r.keys() else None,
+        Reviewed=int(r["Reviewed"]) if "Reviewed" in keys else 0,
+        ReviewedAt=r["ReviewedAt"] if "ReviewedAt" in keys else None,
+        ReviewedBy=r["ReviewedBy"] if "ReviewedBy" in keys else None,
+        Source=r["Source"] if "Source" in keys and r["Source"] else "od_backfill",
+        SourcePdfPath=r["SourcePdfPath"] if "SourcePdfPath" in keys else None,
+        PageIndex=r["PageIndex"] if "PageIndex" in keys else None,
     )

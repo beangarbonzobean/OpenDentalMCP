@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -31,7 +32,8 @@ except Exception:  # pragma: no cover - dep should be installed
 
 from preprocessing import document_text_cache as cache
 from preprocessing import ocr_helper
-from preprocessing.path_resolver import resolve_doc_path
+from preprocessing.html_extract import extract_html_text, is_html_filename
+from preprocessing.path_resolver import resolve_doc_path_with_fallback
 from preprocessing.sql_safety import assert_select_only
 
 log = logging.getLogger(__name__)
@@ -45,6 +47,16 @@ MAX_FILE_BYTES = int(os.environ.get("PREPROC_MAX_FILE_BYTES", str(30 * 1024 * 10
 MAX_PDF_PAGES = int(os.environ.get("PREPROC_MAX_PDF_PAGES", "20"))
 ITER_BATCH = int(os.environ.get("PREPROC_ITER_BATCH", "500"))
 LOCK_FILE_NAME = ".rebuild.lock"
+
+# Output-quality floor. An OCR result with fewer than this many non-whitespace
+# characters is treated as 'unreadable' rather than 'ok' — protects against
+# silent failures (model returned empty, decoder produced garbage, etc.). Real
+# documents have far more text; the threshold mainly catches:
+#   - VLMs that returned an empty string instead of the UNREADABLE sentinel
+#   - HTML files whose decoder produced a few stray bytes
+#   - Blank scanned pages that the model "transcribed" as one or two chars
+# Set to 0 via PREPROC_MIN_OK_CHARS=0 to disable in tests.
+MIN_OK_CHARS = int(os.environ.get("PREPROC_MIN_OK_CHARS", "20"))
 
 
 def _skip_categories() -> set[int]:
@@ -248,6 +260,20 @@ def _make_error(doc: OdDocRow, reason: str) -> cache.DocTextRow:
     )
 
 
+# Filenames matching this pattern are temp-file artifacts (e.g. left behind
+# by Dexis or by an old intake pipeline). They produce 'unreadable' OCR
+# results forever and waste cycles every nightly run because 'unreadable' is
+# not a terminal status. Mark them 'unsupported' instead so they're terminal.
+_TMP_ARTIFACT_RE = re.compile(
+    r"^(?:\d+_)?tmp[0-9a-fA-F]+(?:\.tmp)?\.(?:png|jpg|jpeg)$",
+    re.IGNORECASE,
+)
+
+
+def _is_tmp_artifact(file_name: str) -> bool:
+    return bool(_TMP_ARTIFACT_RE.match(file_name or ""))
+
+
 def _pdf_page_count(file_bytes: bytes) -> Optional[int]:
     try:
         import pypdf  # type: ignore[import-not-found]
@@ -262,6 +288,53 @@ def _pdf_page_count(file_bytes: bytes) -> Optional[int]:
         return None
 
 
+def _debug_capture_doc_result(doc: "OdDocRow", media_type: str, result: "ocr_helper.OcrResult") -> None:
+    """Write one-shot doc-alignment capture when DEBUG_OCR_CAPTURE_PATH is set.
+
+    Pairs with ocr_helper._debug_capture_ollama_io: together the two files let
+    you align one Ollama round-trip (ollama_io.json) with the corresponding DB
+    row fields (doc_alignment.json).
+    """
+    import json as _json
+    capture_dir = os.environ.get("DEBUG_OCR_CAPTURE_PATH", "").strip()
+    if not capture_dir:
+        return
+    capture_file = os.path.join(capture_dir, "doc_alignment.json")
+    if os.path.exists(capture_file):
+        return
+    try:
+        import time as _time
+        payload = {
+            "ts": _time.time(),
+            "doc": {
+                "DocNum": doc.DocNum,
+                "PatNum": doc.PatNum,
+                "FileName": doc.FileName,
+                "DocCategory": doc.DocCategory,
+                "DateCreated": doc.DateCreated,
+                "LName": doc.LName,
+                "FName": doc.FName,
+            },
+            "media_type": media_type,
+            "ocr_result": {
+                "model": result.model,
+                "input_tokens": result.input_tokens,
+                "output_tokens": result.output_tokens,
+                "cost_usd": result.cost_usd,
+                "is_unreadable": result.is_unreadable,
+                "text_len": len(result.text),
+                "text_preview": result.text[:500],
+            },
+            "db_row_status": "unreadable" if result.is_unreadable else "ok",
+        }
+        os.makedirs(capture_dir, exist_ok=True)
+        with open(capture_file, "w", encoding="utf-8") as fh:
+            _json.dump(payload, fh, indent=2, ensure_ascii=False)
+        log.info("DEBUG_OCR_CAPTURE: wrote %s (DocNum=%d)", capture_file, doc.DocNum)
+    except Exception as exc:
+        log.warning("DEBUG_OCR_CAPTURE doc_alignment write failed: %s", exc)
+
+
 def ocr_one_document(
     doc: OdDocRow,
     *,
@@ -271,9 +344,16 @@ def ocr_one_document(
     share_root: Optional[Path] = None,
     max_file_bytes: int = MAX_FILE_BYTES,
     max_pdf_pages: int = MAX_PDF_PAGES,
+    dedup_lookup: Optional[Callable[[str], Optional[cache.DocTextRow]]] = None,
 ) -> cache.DocTextRow:
     """OCR a single document and return a cache row. Pure function: does not
     persist anything. Caller writes the returned row via cache.put_text.
+
+    `dedup_lookup` is an optional callable: given a file's SHA-256 it returns
+    a previously-OCR'd `DocTextRow` (any patient) whose bytes match. When
+    provided and a hit is found, this doc reuses the cached text instead of
+    re-OCRing — saves both time and (for the Haiku/auto backends) money on
+    duplicate form templates.
 
     All exceptions are caught and converted to status='error' rows. The function
     never raises (except for programmer errors like wrong types).
@@ -286,8 +366,16 @@ def ocr_one_document(
     if doc.DocCategory is not None and doc.DocCategory in skip:
         return _make_unsupported(doc, "category_skipped")
 
+    # Filter out OD/Dexis temp artifacts before paying for any I/O — these
+    # tmp*.tmp.png files are leftover thumbnails that never carry usable
+    # content and otherwise waste OCR cycles getting rejected as "unreadable"
+    # on every nightly run (status='unreadable' isn't terminal for retry).
+    if _is_tmp_artifact(doc.FileName):
+        return _make_unsupported(doc, "tmp_artifact")
+
+    is_html = is_html_filename(doc.FileName)
     kind, media_type = ocr_helper.classify_extension(doc.FileName)
-    if kind == "unsupported" or media_type is None:
+    if not is_html and (kind == "unsupported" or media_type is None):
         return _make_unsupported(doc, "extension")
 
     if not doc.LName or not str(doc.LName).strip():
@@ -298,7 +386,7 @@ def ocr_one_document(
         if file_loader is not None:
             file_bytes = file_loader(doc)
         else:
-            path = resolve_doc_path(
+            path = resolve_doc_path_with_fallback(
                 doc.PatNum, doc.LName, doc.FName, doc.FileName, share_root=share_root
             )
             if not path.exists():
@@ -312,6 +400,65 @@ def ocr_one_document(
     if len(file_bytes) > max_file_bytes:
         return _make_unsupported(doc, f"oversize:{len(file_bytes)}")
 
+    # Compute SHA-256 once, up-front. Used for the dedup fast-path AND for the
+    # eventual cache row.
+    sha = compute_sha256(file_bytes)
+
+    # Dedup fast-path: if any other DocNum has Status='ok' rows with this
+    # exact SHA, reuse its text. Most common in practice for form templates
+    # (consents, registration sheets, daily sign-in pages) that get scanned
+    # for many patients with byte-identical content.
+    if dedup_lookup is not None:
+        cached_match = dedup_lookup(sha)
+        if cached_match is not None and cached_match.DocNum != doc.DocNum:
+            log.info(
+                "dedup hit: DocNum=%d reusing OCR from DocNum=%d (sha=%s..., %d chars)",
+                doc.DocNum, cached_match.DocNum, sha[:8], len(cached_match.Text or ""),
+            )
+            return cache.DocTextRow(
+                DocNum=doc.DocNum,
+                PatNum=doc.PatNum,
+                FileName=doc.FileName,
+                DocCategory=doc.DocCategory,
+                DateCreated=doc.DateCreated,
+                Text=cached_match.Text or "",
+                PageCount=cached_match.PageCount,
+                Sha256=sha,
+                OcrModel=f"dedup:{cached_match.OcrModel or 'unknown'}",
+                OcrAt=_now_iso(),
+                Status="ok",
+                CostUsd=0.0,
+            )
+
+    # HTML files (saved Dentrix Eligibility reports etc.) carry text directly —
+    # no OCR needed. Extract with stdlib html.parser, no API cost.
+    if is_html:
+        text = extract_html_text(file_bytes)
+        # Enforce the output-quality floor — a few stray bytes from a malformed
+        # HTML / encoding mismatch should not be cached as 'ok'.
+        if len(text.strip()) < MIN_OK_CHARS:
+            status = "unreadable"
+            err = f"short_output:{len(text.strip())}" if text.strip() else None
+            text = ""  # don't poison the FTS index with garbage
+        else:
+            status = "ok"
+            err = None
+        return cache.DocTextRow(
+            DocNum=doc.DocNum,
+            PatNum=doc.PatNum,
+            FileName=doc.FileName,
+            DocCategory=doc.DocCategory,
+            DateCreated=doc.DateCreated,
+            Text=text,
+            PageCount=1,
+            Sha256=sha,
+            OcrModel="html_extract",
+            OcrAt=_now_iso(),
+            Status=status,
+            ErrorMessage=err,
+            CostUsd=0.0,
+        )
+
     page_count: Optional[int] = None
     if kind == "pdf":
         page_count = _pdf_page_count(file_bytes)
@@ -320,8 +467,16 @@ def ocr_one_document(
 
     # OCR
     fn = ocr_fn if ocr_fn is not None else ocr_helper.ocr_bytes
+    # Category-aware prompt: when OCR_CATEGORY_PROMPTS_FILE is configured AND
+    # this DocCategory has an entry, prime the model with field vocabulary
+    # specific to that document type. Falls back to the generic dental prompt
+    # otherwise.
+    category_prompt = ocr_helper.get_prompt_for_doc_category(doc.DocCategory)
     try:
-        result = fn(file_bytes, media_type=media_type)
+        if category_prompt is not None:
+            result = fn(file_bytes, media_type=media_type, prompt=category_prompt)
+        else:
+            result = fn(file_bytes, media_type=media_type)
     except ocr_helper.OcrConfigError as e:
         return _make_error(doc, f"config:{e}")
     except ocr_helper.OcrError as e:
@@ -329,19 +484,39 @@ def ocr_one_document(
     except Exception as e:  # belt and suspenders
         return _make_error(doc, f"ocr_unexpected:{e}")
 
-    sha = compute_sha256(file_bytes)
+    _debug_capture_doc_result(doc, media_type, result)
+    # `sha` was computed up-front for the dedup fast-path; reuse it.
+
+    # Output validation: a model that returned an empty/short response without
+    # explicitly saying UNREADABLE used to slip through as Status='ok' with
+    # near-empty Text — poisoning the search index. Enforce the same floor we
+    # apply to html_extract.
+    text = result.text
+    if result.is_unreadable:
+        status = "unreadable"
+        err: Optional[str] = None
+        text = ""  # the OCR result already strips this but be defensive
+    elif len(text.strip()) < MIN_OK_CHARS:
+        status = "unreadable"
+        err = f"short_output:{len(text.strip())}"
+        text = ""  # don't index a few characters of model noise
+    else:
+        status = "ok"
+        err = None
+
     return cache.DocTextRow(
         DocNum=doc.DocNum,
         PatNum=doc.PatNum,
         FileName=doc.FileName,
         DocCategory=doc.DocCategory,
         DateCreated=doc.DateCreated,
-        Text=result.text,
+        Text=text,
         PageCount=page_count if kind == "pdf" else 1,
         Sha256=sha,
         OcrModel=result.model,
         OcrAt=_now_iso(),
-        Status="unreadable" if result.is_unreadable else "ok",
+        Status=status,
+        ErrorMessage=err,
         CostUsd=result.cost_usd,
     )
 
@@ -421,6 +596,23 @@ def backfill(
     result = BackfillResult(success=True)
     workers = max(1, int(workers))
 
+    # Reset per-process Ollama circuit-breaker state so a previous run's trip
+    # doesn't carry over. Then probe the local VLM once — if unreachable we
+    # pre-trip the breaker so all pages skip straight to Haiku instead of
+    # burning per-page timeouts. Only relevant when OCR_BACKEND uses local.
+    backend = os.environ.get("OCR_BACKEND", "haiku").lower()
+    if backend in ("local", "auto") and ocr_fn is None:
+        ocr_helper.reset_circuit_breaker()
+        healthy, detail = ocr_helper.health_check_local_vlm()
+        if not healthy:
+            log.warning(
+                "local VLM health check FAILED (%s) — circuit pre-tripped, "
+                "this run will use Haiku page fallback only",
+                detail,
+            )
+        else:
+            log.info("local VLM health check ok (%s)", detail)
+
     try:
         with cache.open_cache(cache_p) as conn:
             # Skip only docs whose status is terminal (ok / unreadable / unsupported).
@@ -479,12 +671,24 @@ def _apply_row_to_result(result: BackfillResult, row: cache.DocTextRow) -> None:
         result.cost_usd_estimate += float(row.CostUsd)
 
 
+def _make_dedup_lookup(conn) -> Callable[[str], Optional[cache.DocTextRow]]:
+    """Build a SHA-256 -> existing 'ok' DocTextRow lookup bound to one connection."""
+    def _lookup(sha256: str) -> Optional[cache.DocTextRow]:
+        try:
+            return cache.find_ok_by_sha256(conn, sha256)
+        except Exception as e:  # belt and suspenders — never let dedup break OCR
+            log.warning("dedup_lookup failed (will OCR normally): %s", e)
+            return None
+    return _lookup
+
+
 def _backfill_sequential(
     tools: Any, conn, result: BackfillResult, existing: set[int],
     *, after_doc_num: int, max_docs: int, max_spend_usd: float, dry_run: bool,
     skip: set[int], file_loader, ocr_fn, share_root,
 ) -> None:
     """Original single-threaded loop. Preserved as the workers=1 path."""
+    dedup_lookup = _make_dedup_lookup(conn)
     for doc in iter_documents(tools, after_doc_num=after_doc_num):
         result.scanned += 1
 
@@ -512,6 +716,7 @@ def _backfill_sequential(
             file_loader=file_loader,
             ocr_fn=ocr_fn,
             share_root=share_root,
+            dedup_lookup=dedup_lookup,
         )
         cache.put_text(conn, row)
         _apply_row_to_result(result, row)
@@ -536,17 +741,19 @@ def _backfill_parallel(
     from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
     def _worker(doc: OdDocRow) -> cache.DocTextRow:
-        row = ocr_one_document(
-            doc,
-            skip_categories=skip,
-            file_loader=file_loader,
-            ocr_fn=ocr_fn,
-            share_root=share_root,
-        )
         # Each worker uses its own connection — sqlite3 connections aren't
         # safely shared across threads. WAL mode + per-connection commit
-        # serializes writes correctly.
+        # serializes writes correctly. We use the same connection for the
+        # dedup lookup and the put_text write so they share state.
         with cache.open_cache(cache_p) as worker_conn:
+            row = ocr_one_document(
+                doc,
+                skip_categories=skip,
+                file_loader=file_loader,
+                ocr_fn=ocr_fn,
+                share_root=share_root,
+                dedup_lookup=_make_dedup_lookup(worker_conn),
+            )
             cache.put_text(worker_conn, row)
         return row
 
@@ -639,6 +846,7 @@ def fetch_or_ocr(
             file_loader=file_loader,
             ocr_fn=ocr_fn,
             share_root=share_root,
+            dedup_lookup=_make_dedup_lookup(conn),
         )
         cache.put_text(conn, row)
         return row, "fresh"

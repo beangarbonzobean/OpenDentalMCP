@@ -45,11 +45,21 @@ def _write_doc_on_share(
     folder = share_root / lname[0].upper() / f"{lname}{fname}{pat_num}"
     folder.mkdir(parents=True, exist_ok=True)
     p = folder / file_name
-    p.write_bytes(content)
+    # Tag the bytes with the (PatNum, FileName) tuple so each test doc gets a
+    # distinct SHA-256 — otherwise the dedup fast-path in ocr_one_document
+    # short-circuits the second+ identical-content doc, which is correct
+    # production behavior but defeats tests that expect every doc to be OCR'd.
+    # Tests that explicitly want to exercise dedup should write content directly
+    # via Path.write_bytes(), not through this helper.
+    uniqued = content + f"|tag:{pat_num}:{file_name}".encode("utf-8")
+    p.write_bytes(uniqued)
     return p
 
 
-def _make_ocr_fn(text: str = "Hello world", *, cost: float = 0.001, unreadable: bool = False):
+def _make_ocr_fn(
+    text: str = "Hello world from the OCR test stub",  # >= MIN_OK_CHARS (20)
+    *, cost: float = 0.001, unreadable: bool = False,
+):
     """Return a stub callable mimicking ocr_helper.ocr_bytes."""
     calls = []
 
@@ -121,10 +131,10 @@ def test_ocr_one_document_happy_path(share_root: Path) -> None:
         DocNum=42, PatNum=42, FileName="consent.jpg",
         DateCreated="2026-04-01", DocCategory=5, LName="Young", FName="Ben",
     )
-    fn = _make_ocr_fn(text="patient agrees")
+    fn = _make_ocr_fn(text="patient agrees to the consent form")
     row = idx.ocr_one_document(doc, ocr_fn=fn, share_root=share_root)
     assert row.Status == "ok"
-    assert row.Text == "patient agrees"
+    assert row.Text == "patient agrees to the consent form"
     assert row.PageCount == 1
     assert row.Sha256 is not None
     assert row.CostUsd == 0.001
@@ -232,6 +242,267 @@ def test_ocr_one_document_ocr_config_error(share_root: Path) -> None:
     assert "config" in (row.ErrorMessage or "")
 
 
+def test_ocr_one_document_html_extracted_no_ocr(share_root: Path) -> None:
+    """HTML files (Dentrix Eligibility reports etc.) should be parsed
+    locally — no OCR call, no cost, status='ok'."""
+    html_bytes = (
+        b"<html><body><div>Subscriber: John Doe</div>"
+        b"<div>Group: 12345</div></body></html>"
+    )
+    _write_doc_on_share(share_root, "Doe", "J", 1, "Page1.htm", html_bytes)
+    doc = idx.OdDocRow(
+        DocNum=1, PatNum=1, FileName="Page1.htm",
+        DateCreated="2026-04-01", DocCategory=1, LName="Doe", FName="J",
+    )
+    fn = _make_ocr_fn()  # should NOT be invoked
+    row = idx.ocr_one_document(doc, ocr_fn=fn, share_root=share_root)
+    assert row.Status == "ok"
+    assert "Subscriber: John Doe" in row.Text
+    assert "Group: 12345" in row.Text
+    assert row.OcrModel == "html_extract"
+    assert row.CostUsd == 0.0
+    assert fn.calls == []  # type: ignore[attr-defined]
+
+
+def test_ocr_one_document_html_empty_marks_unreadable(share_root: Path) -> None:
+    """An HTML file that produces no extractable text marks unreadable, not error."""
+    _write_doc_on_share(share_root, "Doe", "J", 1, "blank.htm", b"<html><body></body></html>")
+    doc = idx.OdDocRow(
+        DocNum=1, PatNum=1, FileName="blank.htm",
+        DateCreated="2026-04-01", DocCategory=1, LName="Doe", FName="J",
+    )
+    row = idx.ocr_one_document(doc, share_root=share_root)
+    assert row.Status == "unreadable"
+    assert row.OcrModel == "html_extract"
+
+
+def test_ocr_one_document_tmp_artifact_terminal(share_root: Path) -> None:
+    """tmp*.tmp.png files should be marked unsupported (terminal) without
+    even reading the file — they're never going to OCR usefully."""
+    # File doesn't even need to exist on the share — we short-circuit on name.
+    doc = idx.OdDocRow(
+        DocNum=1, PatNum=1, FileName="tmpA282.tmp.png",
+        DateCreated="2026-04-01", DocCategory=1, LName="Doe", FName="J",
+    )
+    fn = _make_ocr_fn()
+    row = idx.ocr_one_document(doc, ocr_fn=fn, share_root=share_root)
+    assert row.Status == "unsupported"
+    assert row.ErrorMessage == "tmp_artifact"
+    assert fn.calls == []  # type: ignore[attr-defined]
+
+
+def test_ocr_one_document_tmp_artifact_with_prefix(share_root: Path) -> None:
+    """tmp artifacts may have a numeric prefix added by Dexis (e.g. '325_tmp...')."""
+    doc = idx.OdDocRow(
+        DocNum=1, PatNum=1, FileName="325_tmpA282.tmp.png",
+        DateCreated="2026-04-01", DocCategory=1, LName="Doe", FName="J",
+    )
+    row = idx.ocr_one_document(doc, share_root=share_root)
+    assert row.Status == "unsupported"
+    assert row.ErrorMessage == "tmp_artifact"
+
+
+def test_ocr_one_document_short_output_demoted_to_unreadable(share_root: Path) -> None:
+    """A model that returned <MIN_OK_CHARS without saying UNREADABLE used to
+    cache as Status='ok' with empty/garbage Text. Now it's demoted."""
+    _write_doc_on_share(share_root, "Doe", "J", 1, "blank.jpg", b"\xff\xd8\xff")
+    doc = idx.OdDocRow(
+        DocNum=1, PatNum=1, FileName="blank.jpg",
+        DateCreated="2026-04-01", DocCategory=1, LName="Doe", FName="J",
+    )
+    fn = _make_ocr_fn(text="abc")  # 3 chars, not the UNREADABLE sentinel
+    row = idx.ocr_one_document(doc, ocr_fn=fn, share_root=share_root)
+    assert row.Status == "unreadable"
+    assert row.Text == ""  # not indexed
+    assert "short_output" in (row.ErrorMessage or "")
+    assert "3" in (row.ErrorMessage or "")
+
+
+def test_ocr_one_document_meaningful_text_kept_as_ok(share_root: Path) -> None:
+    _write_doc_on_share(share_root, "Doe", "J", 1, "form.jpg", b"\xff\xd8\xff")
+    doc = idx.OdDocRow(
+        DocNum=1, PatNum=1, FileName="form.jpg",
+        DateCreated="2026-04-01", DocCategory=1, LName="Doe", FName="J",
+    )
+    fn = _make_ocr_fn(text="patient signed the consent form today")  # > 20 chars
+    row = idx.ocr_one_document(doc, ocr_fn=fn, share_root=share_root)
+    assert row.Status == "ok"
+    assert row.Text.startswith("patient signed")
+    assert row.ErrorMessage is None
+
+
+def test_ocr_one_document_html_short_output_demoted(share_root: Path) -> None:
+    """Same floor applies to html_extract — guards against the UTF-16 BOM bug
+    where the decoder emits a few stray characters."""
+    _write_doc_on_share(share_root, "Doe", "J", 1, "tiny.htm",
+                        b"<html><body>x</body></html>")
+    doc = idx.OdDocRow(
+        DocNum=1, PatNum=1, FileName="tiny.htm",
+        DateCreated="2026-04-01", DocCategory=1, LName="Doe", FName="J",
+    )
+    row = idx.ocr_one_document(doc, share_root=share_root)
+    assert row.Status == "unreadable"
+    assert row.OcrModel == "html_extract"
+    assert row.Text == ""
+    assert "short_output" in (row.ErrorMessage or "")
+
+
+def test_ocr_one_document_dedup_lookup_hit_skips_ocr(share_root: Path) -> None:
+    """When dedup_lookup returns a prior ok row, OCR is NOT called and the
+    text is reused."""
+    _write_doc_on_share(share_root, "Doe", "J", 99, "form.pdf", b"%PDF-fake")
+    doc = idx.OdDocRow(
+        DocNum=2, PatNum=99, FileName="form.pdf",
+        DateCreated="2026-04-01", DocCategory=5, LName="Doe", FName="J",
+    )
+    fn = _make_ocr_fn()  # would-be OCR — should not be called
+    prior = cache.DocTextRow(
+        DocNum=1, PatNum=42, FileName="form.pdf",
+        Text="cached text from doc 1 reused for doc 2",
+        Sha256="abc", OcrModel="qwen2.5vl:7b", OcrAt="2026-05-04",
+        Status="ok", PageCount=1,
+    )
+    captured = []
+    def lookup(sha):
+        captured.append(sha)
+        return prior
+    row = idx.ocr_one_document(
+        doc, ocr_fn=fn, share_root=share_root, dedup_lookup=lookup,
+    )
+    assert row.Status == "ok"
+    assert row.Text == "cached text from doc 1 reused for doc 2"
+    assert row.OcrModel.startswith("dedup:")
+    assert "qwen2.5vl:7b" in row.OcrModel  # source model preserved
+    assert row.CostUsd == 0.0
+    assert row.Sha256  # was computed
+    assert row.PatNum == 99  # row points to NEW doc, not source
+    assert row.DocNum == 2
+    assert fn.calls == []  # type: ignore[attr-defined]
+    assert len(captured) == 1  # lookup was queried with the SHA
+
+
+def test_ocr_one_document_dedup_lookup_miss_proceeds_to_ocr(share_root: Path) -> None:
+    """When dedup_lookup returns None, normal OCR happens."""
+    _write_doc_on_share(share_root, "Doe", "J", 99, "form.jpg", b"\xff\xd8\xff")
+    doc = idx.OdDocRow(
+        DocNum=2, PatNum=99, FileName="form.jpg",
+        DateCreated="2026-04-01", DocCategory=5, LName="Doe", FName="J",
+    )
+    fn = _make_ocr_fn(text="freshly OCR'd content for the new patient")
+    row = idx.ocr_one_document(
+        doc, ocr_fn=fn, share_root=share_root,
+        dedup_lookup=lambda sha: None,
+    )
+    assert row.Status == "ok"
+    assert row.Text == "freshly OCR'd content for the new patient"
+    assert "dedup" not in (row.OcrModel or "")
+    assert len(fn.calls) == 1  # type: ignore[attr-defined]
+
+
+def test_ocr_one_document_dedup_does_not_self_match(share_root: Path) -> None:
+    """If somehow lookup returns the SAME DocNum (shouldn't happen in practice
+    since we only call lookup before writing), don't loop."""
+    _write_doc_on_share(share_root, "Doe", "J", 99, "form.jpg", b"\xff\xd8\xff")
+    doc = idx.OdDocRow(
+        DocNum=42, PatNum=99, FileName="form.jpg",
+        DateCreated="2026-04-01", DocCategory=5, LName="Doe", FName="J",
+    )
+    self_row = cache.DocTextRow(
+        DocNum=42, PatNum=99, FileName="form.jpg",
+        Text="my own old text", Sha256="abc", OcrModel="x",
+        OcrAt="2026-04-01", Status="ok", PageCount=1,
+    )
+    fn = _make_ocr_fn(text="newly OCR'd text for this same doc")
+    row = idx.ocr_one_document(
+        doc, ocr_fn=fn, share_root=share_root,
+        dedup_lookup=lambda sha: self_row,
+    )
+    # Should fall through to OCR
+    assert "dedup" not in (row.OcrModel or "")
+    assert row.Text.startswith("newly OCR'd")
+
+
+def test_ocr_one_document_passes_category_prompt(
+    share_root: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """If OCR_CATEGORY_PROMPTS_FILE has an entry for this DocCategory, the
+    custom prompt flows into the ocr_fn call."""
+    prompts_file = tmp_path / "prompts.json"
+    prompts_file.write_text(
+        '{"461": "This is an EOB. Preserve patient name, claim numbers, '
+        'CDT codes, allowed amounts."}'
+    )
+    monkeypatch.setenv("OCR_CATEGORY_PROMPTS_FILE", str(prompts_file))
+    ocr_helper.reset_category_prompts_cache()
+
+    _write_doc_on_share(share_root, "Doe", "J", 1, "eob.pdf", b"%PDF-fake")
+    doc = idx.OdDocRow(
+        DocNum=1, PatNum=1, FileName="eob.pdf",
+        DateCreated="2026-04-01", DocCategory=461,  # match the prompt key
+        LName="Doe", FName="J",
+    )
+    captured_prompts: list = []
+    def fn(file_bytes: bytes, *, media_type: str, prompt: Optional[str] = None, **kw):
+        captured_prompts.append(prompt)
+        return ocr_helper.OcrResult(
+            text="EOB text long enough to satisfy the floor",
+            model="qwen2.5vl:7b", input_tokens=10, output_tokens=10,
+            cost_usd=0.0, media_type=media_type, is_unreadable=False,
+        )
+    row = idx.ocr_one_document(doc, ocr_fn=fn, share_root=share_root)
+    assert row.Status == "ok"
+    assert len(captured_prompts) == 1
+    assert "EOB" in captured_prompts[0]
+    assert "CDT codes" in captured_prompts[0]
+
+
+def test_ocr_one_document_passes_no_prompt_for_unknown_category(
+    share_root: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Unknown category: ocr_fn called WITHOUT prompt (so default applies)."""
+    prompts_file = tmp_path / "prompts.json"
+    prompts_file.write_text('{"461": "EOB prompt"}')
+    monkeypatch.setenv("OCR_CATEGORY_PROMPTS_FILE", str(prompts_file))
+    ocr_helper.reset_category_prompts_cache()
+
+    _write_doc_on_share(share_root, "Doe", "J", 1, "x.jpg", b"\xff\xd8\xff")
+    doc = idx.OdDocRow(
+        DocNum=1, PatNum=1, FileName="x.jpg",
+        DateCreated="2026-04-01", DocCategory=999,  # unknown
+        LName="Doe", FName="J",
+    )
+    seen_kwargs: list = []
+    def fn(file_bytes: bytes, *, media_type: str, **kw):
+        seen_kwargs.append(kw)
+        return ocr_helper.OcrResult(
+            text="generic OCR text long enough for floor",
+            model="qwen2.5vl:7b", input_tokens=10, output_tokens=10,
+            cost_usd=0.0, media_type=media_type, is_unreadable=False,
+        )
+    idx.ocr_one_document(doc, ocr_fn=fn, share_root=share_root)
+    assert len(seen_kwargs) == 1
+    # No prompt kwarg passed (we only pass it when category lookup hits).
+    assert "prompt" not in seen_kwargs[0]
+
+
+def test_ocr_one_document_uses_patnum_fallback(share_root: Path) -> None:
+    """If the constructed folder doesn't exist, scan for one ending in PatNum."""
+    # Folder on disk has the OD-sanitized name (no hyphen).
+    folder = share_root / "E" / "EDWARDSGRAYADEHRRA18674"
+    folder.mkdir(parents=True)
+    (folder / "x.jpg").write_bytes(b"\xff\xd8\xff")
+    doc = idx.OdDocRow(
+        DocNum=1, PatNum=18674, FileName="x.jpg",
+        DateCreated="2026-04-01", DocCategory=1,
+        LName="EDWARDS-GRAY", FName="ADEHRRA",
+    )
+    fn = _make_ocr_fn(text="recovered text from the EDWARDS-GRAY patient folder")
+    row = idx.ocr_one_document(doc, ocr_fn=fn, share_root=share_root)
+    assert row.Status == "ok"
+    assert "EDWARDS-GRAY" in row.Text
+    assert len(fn.calls) == 1  # type: ignore[attr-defined]
+
+
 def test_ocr_one_document_ocr_runtime_error(share_root: Path) -> None:
     _write_doc_on_share(share_root, "Doe", "J", 1, "x.jpg", b"x")
     doc = idx.OdDocRow(
@@ -252,14 +523,21 @@ def test_ocr_one_document_ocr_runtime_error(share_root: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def _setup_three_docs(fake_tools: FakeTools, share_root: Path) -> None:
-    fake_tools.push_rows("SELECT", [
-        _doc(doc_num=1, pat_num=10),
-        _doc(doc_num=2, pat_num=10),
-        _doc(doc_num=3, pat_num=11),
-    ])
+    # Use a distinct filename per DocNum so each row gets unique on-disk bytes
+    # (otherwise the dedup fast-path treats docs 1 & 2 as duplicates because
+    # they share PatNum and the default file_name).
+    rows = [
+        _doc(doc_num=1, pat_num=10, file_name="doc1.jpg"),
+        _doc(doc_num=2, pat_num=10, file_name="doc2.jpg"),
+        _doc(doc_num=3, pat_num=11, file_name="doc3.jpg"),
+    ]
+    fake_tools.push_rows("SELECT", rows)
     fake_tools.push_rows("SELECT", [])
-    for n in (1, 2, 3):
-        _write_doc_on_share(share_root, "Young", "Ben", 10 if n != 3 else 11, _doc(doc_num=n)["FileName"], b"x")
+    for r in rows:
+        _write_doc_on_share(
+            share_root, "Young", "Ben",
+            r["PatNum"], r["FileName"], b"x",
+        )
 
 
 def test_backfill_happy_path(
@@ -332,7 +610,7 @@ def test_backfill_retries_error_rows(
     fake_tools.push_rows("SELECT", [])
     _write_doc_on_share(share_root, "Young", "Ben", 10, "consent.jpg", b"x")
 
-    fn = _make_ocr_fn(text="recovered")
+    fn = _make_ocr_fn(text="recovered text for the retry path")
     res = idx.backfill(
         fake_tools, cache_path=cache_path, lock_path=lock_path,
         max_docs=10, max_spend_usd=1.0, ocr_fn=fn, share_root=share_root,
@@ -344,7 +622,7 @@ def test_backfill_retries_error_rows(
         r1 = cache.get_text(conn, 1)
         assert r1 is not None
         assert r1.Status == "ok"
-        assert r1.Text == "recovered"
+        assert r1.Text == "recovered text for the retry path"
 
 
 def test_backfill_idempotent_skips_cached(
@@ -466,19 +744,19 @@ def test_fetch_or_ocr_cache_miss_triggers_ocr(
 ) -> None:
     fake_tools.push_rows("SELECT", [_doc(doc_num=42, pat_num=10)])
     _write_doc_on_share(share_root, "Young", "Ben", 10, "consent.jpg", b"x")
-    fn = _make_ocr_fn(text="fresh ocr")
+    fn = _make_ocr_fn(text="fresh ocr from the runtime path")
     row, source = idx.fetch_or_ocr(
         fake_tools, 42, cache_path=cache_path, ocr_fn=fn, share_root=share_root,
     )
     assert source == "fresh"
     assert row is not None
-    assert row.Text == "fresh ocr"
+    assert row.Text == "fresh ocr from the runtime path"
     assert len(fn.calls) == 1  # type: ignore[attr-defined]
     # Now cached.
     with cache.open_cache(cache_path) as conn:
         cached = cache.get_text(conn, 42)
         assert cached is not None
-        assert cached.Text == "fresh ocr"
+        assert cached.Text == "fresh ocr from the runtime path"
 
 
 def test_fetch_or_ocr_missing_in_od(
@@ -501,13 +779,13 @@ def test_backfill_parallel_processes_all_docs(
 ) -> None:
     """workers=4 should process all docs and end in a consistent state."""
     n_docs = 20
-    rows = [_doc(doc_num=i, pat_num=10) for i in range(1, n_docs + 1)]
+    rows = [_doc(doc_num=i, pat_num=10, file_name=f"doc{i}.jpg") for i in range(1, n_docs + 1)]
     fake_tools.push_rows("SELECT", rows)
     fake_tools.push_rows("SELECT", [])
     for r in rows:
         _write_doc_on_share(share_root, "Young", "Ben", 10, r["FileName"], b"x")
 
-    fn = _make_ocr_fn(text="parallel ok")
+    fn = _make_ocr_fn(text="parallel ok output text from the worker pool")
     res = idx.backfill(
         fake_tools, cache_path=cache_path, lock_path=lock_path,
         max_docs=100, max_spend_usd=10.0, workers=4,
@@ -526,7 +804,7 @@ def test_backfill_parallel_processes_all_docs(
 def test_backfill_parallel_max_docs_halts(
     fake_tools: FakeTools, share_root: Path, cache_path: Path, lock_path: Path,
 ) -> None:
-    rows = [_doc(doc_num=i, pat_num=10) for i in range(1, 21)]
+    rows = [_doc(doc_num=i, pat_num=10, file_name=f"doc{i}.jpg") for i in range(1, 21)]
     fake_tools.push_rows("SELECT", rows)
     fake_tools.push_rows("SELECT", [])
     for r in rows:
@@ -550,7 +828,7 @@ def test_backfill_parallel_budget_halts(
 ) -> None:
     """Budget cap halts the loop. In parallel, in-flight workers may slightly
     overshoot the cap — that's expected and bounded by `workers`."""
-    rows = [_doc(doc_num=i, pat_num=10) for i in range(1, 21)]
+    rows = [_doc(doc_num=i, pat_num=10, file_name=f"doc{i}.jpg") for i in range(1, 21)]
     fake_tools.push_rows("SELECT", rows)
     fake_tools.push_rows("SELECT", [])
     for r in rows:
@@ -582,7 +860,7 @@ def test_backfill_parallel_cached_docs_are_skipped(
             DocNum=1, PatNum=10, Text="already cached",
             OcrAt="2026-04-01", Status="ok",
         ))
-    rows = [_doc(doc_num=i, pat_num=10) for i in range(1, 6)]
+    rows = [_doc(doc_num=i, pat_num=10, file_name=f"doc{i}.jpg") for i in range(1, 6)]
     fake_tools.push_rows("SELECT", rows)
     fake_tools.push_rows("SELECT", [])
     for r in rows:
@@ -623,7 +901,7 @@ def test_backfill_parallel_worker_exception_counts_as_error(
 ) -> None:
     """If the worker function itself raises (not an OcrError but a programmer
     bug), the future fails. The drain code logs it and increments errors."""
-    rows = [_doc(doc_num=i, pat_num=10) for i in range(1, 6)]
+    rows = [_doc(doc_num=i, pat_num=10, file_name=f"doc{i}.jpg") for i in range(1, 6)]
     fake_tools.push_rows("SELECT", rows)
     fake_tools.push_rows("SELECT", [])
     for r in rows:
@@ -649,7 +927,7 @@ def test_backfill_parallel_worker_exception_counts_as_error(
 
     import unittest.mock as _mock
     with _mock.patch.object(dtc, "put_text", side_effect=flaky_put):
-        fn = _make_ocr_fn(text="ok")
+        fn = _make_ocr_fn(text="ok output text long enough to pass the floor")
         res = idx.backfill(
             fake_tools, cache_path=cache_path, lock_path=lock_path,
             max_docs=10, max_spend_usd=1.0, workers=2,
@@ -666,7 +944,7 @@ def test_backfill_workers_clamped_to_one_minimum(
     fake_tools: FakeTools, share_root: Path, cache_path: Path, lock_path: Path,
 ) -> None:
     """workers<=1 (including 0 or negative) routes through the sequential path."""
-    rows = [_doc(doc_num=i, pat_num=10) for i in range(1, 4)]
+    rows = [_doc(doc_num=i, pat_num=10, file_name=f"doc{i}.jpg") for i in range(1, 4)]
     fake_tools.push_rows("SELECT", rows)
     fake_tools.push_rows("SELECT", [])
     for r in rows:
@@ -692,10 +970,10 @@ def test_fetch_or_ocr_re_ocrs_when_previously_errored(
         ))
     fake_tools.push_rows("SELECT", [_doc(doc_num=42, pat_num=10)])
     _write_doc_on_share(share_root, "Young", "Ben", 10, "consent.jpg", b"x")
-    fn = _make_ocr_fn(text="recovered")
+    fn = _make_ocr_fn(text="recovered text after the prior error row")
     row, source = idx.fetch_or_ocr(
         fake_tools, 42, cache_path=cache_path, ocr_fn=fn, share_root=share_root,
     )
     assert source == "fresh"
     assert row is not None
-    assert row.Text == "recovered"
+    assert row.Text == "recovered text after the prior error row"

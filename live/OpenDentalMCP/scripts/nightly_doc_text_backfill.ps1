@@ -29,6 +29,11 @@ $env:LOCAL_VLM_PRIMARY              = 'qwen2.5vl:7b'
 $env:LOCAL_VLM_FALLBACK             = 'qwen3.5:9b'
 $env:LOCAL_VLM_DPI                  = '150'
 $env:LOCAL_VLM_HAIKU_PAGE_FALLBACK  = 'true'  # rescue pages that crash both local models
+# LABCOMPUTER is a shared GPU box (CAD/CAM, Medit, Open Dental, browser, etc).
+# Tell Ollama to unload qwen2.5vl:7b 30s after the last call so its 17 GB of
+# VRAM is freed for staff apps once the nightly batch finishes. During the
+# run itself, workers=4 fires calls back-to-back so the model stays warm.
+$env:LOCAL_VLM_KEEP_ALIVE           = '30s'
 if ($apiKey) { $env:ANTHROPIC_API_KEY = $apiKey }
 
 # Per-run caps. With workers=4 + OLLAMA_NUM_PARALLEL=4 on the GPU host we

@@ -64,19 +64,83 @@ LOCAL_BASE_URL_DEFAULT = "http://localhost:11434"
 LOCAL_PRIMARY_DEFAULT = "glm-ocr:q8_0"
 LOCAL_FALLBACK_DEFAULT = "qwen3.5:9b"
 LOCAL_DPI_DEFAULT = 150
-LOCAL_TIMEOUT_DEFAULT = 600  # seconds per page
+LOCAL_TIMEOUT_DEFAULT = 600  # seconds per page (max — only used on retry)
+# First attempt uses a tighter ceiling so a hung Ollama doesn't burn 10 minutes
+# per page before failing through. Healthy calls finish in 0.5–10s; even cold-
+# start of a cached model is well under 30s.
+LOCAL_FIRST_ATTEMPT_TIMEOUT_DEFAULT = 30
+# After this many consecutive Ollama errors in one process, trip the circuit
+# breaker and skip directly to Haiku for the rest of the run. Prevents a dead
+# GPU host from making every page wait 30s × N before falling through.
+LOCAL_CIRCUIT_TRIP_AFTER_DEFAULT = 5
 
 # Model-specific prompts. GLM-OCR was trained with a "Text Recognition:"
-# convention; general VLMs need a more verbose instruction.
+# convention; general VLMs need a more verbose instruction tuned for dental
+# practice documents (consents, treatment plans, statements, EOBs, insurance
+# eligibility reports, lab slips, etc).
 _PROMPT_BY_MODEL_PREFIX = {
     "glm-ocr": "Text Recognition:",
 }
 _PROMPT_GENERIC_LOCAL = (
-    "Transcribe all text visible in this image. Output plain text only — "
-    "do not add commentary or summarize. Preserve line breaks where they "
-    "help represent the form layout. If the image is blank or illegible, "
-    "respond with the single word UNREADABLE and nothing else."
+    "Transcribe ALL text visible in this dental practice document — "
+    "printed text, handwritten notes, signatures, dates, fees, ADA codes, "
+    "tooth numbers, insurance/subscriber IDs, and any tabular data. "
+    "Preserve form structure with line breaks; render tables row-by-row. "
+    "Do not summarize, paraphrase, or add commentary. "
+    "If the image is genuinely blank or illegible, respond with the single "
+    "word UNREADABLE and nothing else."
 )
+
+
+# Optional per-DocCategory prompt override. Populated from an env-var-pointed
+# JSON file at most once per process. Keys are DocCategory DefNum (int as str
+# in JSON, normalized to int here); values are full prompt strings.
+#
+# Example /path/to/prompts.json:
+#     {"461": "This is an insurance EOB...", "454": "This is a billing statement..."}
+# Configure with OCR_CATEGORY_PROMPTS_FILE=/path/to/prompts.json.
+_category_prompts_cache: Optional[dict[int, str]] = None
+
+
+def _load_category_prompts() -> dict[int, str]:
+    global _category_prompts_cache
+    if _category_prompts_cache is not None:
+        return _category_prompts_cache
+    path = os.environ.get("OCR_CATEGORY_PROMPTS_FILE", "").strip()
+    out: dict[int, str] = {}
+    if path:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                raw = json.load(fh)
+            for k, v in raw.items():
+                try:
+                    out[int(k)] = str(v)
+                except (TypeError, ValueError):
+                    log.warning("category_prompts: bad key %r, skipping", k)
+        except FileNotFoundError:
+            log.warning("OCR_CATEGORY_PROMPTS_FILE not found: %s", path)
+        except Exception as e:
+            log.warning("OCR_CATEGORY_PROMPTS_FILE load failed: %s", e)
+    _category_prompts_cache = out
+    return out
+
+
+def get_prompt_for_doc_category(doc_category: Optional[int]) -> Optional[str]:
+    """Return the per-category prompt override, or None to use defaults.
+
+    Wired into the orchestrator so docs of known categories (EOBs, statements,
+    consents, etc.) can be primed with field vocabulary that lifts VLM accuracy
+    on structured forms — typically 5-10% on EOB-style layouts.
+    """
+    if doc_category is None:
+        return None
+    return _load_category_prompts().get(int(doc_category))
+
+
+def reset_category_prompts_cache() -> None:
+    """Test seam — force reload from OCR_CATEGORY_PROMPTS_FILE on next call."""
+    global _category_prompts_cache
+    _category_prompts_cache = None
 
 
 def _prompt_for_model(model: str) -> str:
@@ -95,6 +159,83 @@ class OcrResult:
     cost_usd: float
     media_type: str
     is_unreadable: bool
+
+
+# ---------------------------------------------------------------------------
+# Local-VLM circuit breaker (process-scoped state)
+# ---------------------------------------------------------------------------
+# Guards against a hung Ollama host wasting time across hundreds of pages. After
+# `_circuit_trip_threshold` consecutive failures the circuit is "tripped" — the
+# rest of the run skips local OCR and goes straight to Haiku page fallback (when
+# enabled). A successful local call resets the consecutive-failure counter; the
+# tripped flag persists for the lifetime of the process to avoid flapping.
+_local_circuit: dict = {"consecutive_failures": 0, "tripped": False}
+
+
+def _circuit_trip_threshold() -> int:
+    return int(os.environ.get(
+        "LOCAL_VLM_CIRCUIT_TRIP_AFTER",
+        str(LOCAL_CIRCUIT_TRIP_AFTER_DEFAULT),
+    ))
+
+
+def _circuit_record_failure() -> None:
+    _local_circuit["consecutive_failures"] += 1
+    if (not _local_circuit["tripped"]
+            and _local_circuit["consecutive_failures"] >= _circuit_trip_threshold()):
+        _local_circuit["tripped"] = True
+        log.error(
+            "local-VLM circuit tripped after %d consecutive failures; "
+            "skipping local for remainder of process",
+            _local_circuit["consecutive_failures"],
+        )
+
+
+def _circuit_record_success() -> None:
+    _local_circuit["consecutive_failures"] = 0
+
+
+def _circuit_is_tripped() -> bool:
+    return bool(_local_circuit["tripped"])
+
+
+def reset_circuit_breaker() -> None:
+    """Test seam — reset circuit-breaker state to defaults."""
+    _local_circuit["consecutive_failures"] = 0
+    _local_circuit["tripped"] = False
+
+
+def health_check_local_vlm(
+    *,
+    base_url: Optional[str] = None,
+    timeout: float = 5.0,
+    fetcher=None,
+) -> tuple[bool, str]:
+    """Probe the Ollama /api/tags endpoint. Returns (is_healthy, detail).
+
+    If the host returns a non-200 or doesn't respond within `timeout`, trip the
+    circuit breaker so the run skips local OCR entirely. Cheap (~ms when up,
+    `timeout` when down) — call this once at backfill start when OCR_BACKEND
+    is `local` or `auto`.
+
+    `fetcher(url, timeout) -> (status_code, body_bytes)` is a test seam.
+    """
+    base = (base_url or os.environ.get("LOCAL_VLM_BASE_URL", LOCAL_BASE_URL_DEFAULT)).rstrip("/")
+    url = f"{base}/api/tags"
+    if fetcher is None:
+        def fetcher(u, t):
+            req = urllib.request.Request(u, method="GET")
+            with urllib.request.urlopen(req, timeout=t) as resp:
+                return resp.status, resp.read()
+    try:
+        status, _body = fetcher(url, timeout)
+    except Exception as e:
+        _local_circuit["tripped"] = True
+        return False, f"unreachable:{type(e).__name__}:{e}"
+    if status != 200:
+        _local_circuit["tripped"] = True
+        return False, f"http_{status}"
+    return True, "ok"
 
 
 class OcrError(RuntimeError):
@@ -325,7 +466,11 @@ def _ocr_via_local(
     if haiku_page_fallback is None:
         haiku_page_fallback = os.environ.get("LOCAL_VLM_HAIKU_PAGE_FALLBACK", "false").lower() == "true"
 
-    # Decide on the page list (one image -> one element).
+    # Decide on the page list (one image -> one element). Track the per-page
+    # media-type because PDFs get rendered to PNG by PyMuPDF (so each page is
+    # PNG bytes regardless of source), while raw image inputs keep their
+    # original media-type. The Haiku page-fallback path needs the right
+    # media-type to avoid `image/png` being declared for actual JPEG bytes.
     if media_type == "application/pdf":
         renderer = pdf_renderer if pdf_renderer is not None else _default_pdf_renderer
         try:
@@ -334,8 +479,10 @@ def _ocr_via_local(
             raise OcrError(f"pdf_render_failed:{e}") from e
         if not pages:
             raise OcrError("pdf_no_pages")
+        page_media_type = "image/png"
     elif media_type.startswith("image/"):
         pages = [file_bytes]
+        page_media_type = media_type
     else:
         raise OcrError(f"Unsupported media_type: {media_type}")
 
@@ -359,6 +506,7 @@ def _ocr_via_local(
             page_idx=page_idx,
             haiku_page_fallback=haiku_page_fallback,
             haiku_caller=haiku_caller,
+            page_media_type=page_media_type,
         )
         parts.append(text)
         total_in += in_tok
@@ -393,8 +541,18 @@ def _ocr_page_with_fallback(
     page_idx: int,
     haiku_page_fallback: bool = False,
     haiku_caller=None,
+    page_media_type: str = "image/png",
 ) -> tuple[str, str, int, int, float]:
     """OCR one page with retry-once on primary, then fallback to secondary.
+
+    Per-attempt timeout ladder:
+      - primary attempt 1: min(timeout, LOCAL_VLM_FIRST_ATTEMPT_TIMEOUT)
+      - primary attempt 2: full `timeout`
+      - fallback model:    full `timeout`
+
+    Circuit breaker: if the process-scoped `_local_circuit` is tripped (too
+    many consecutive Ollama failures earlier in the run), local tiers are
+    skipped entirely and we go straight to Haiku page fallback when enabled.
 
     If both local tiers fail and `haiku_page_fallback=True`, makes one final
     attempt via Claude Haiku for that page.
@@ -402,42 +560,70 @@ def _ocr_page_with_fallback(
     Returns (text, model_used, input_tokens, output_tokens, cost_usd).
     """
     last_err: Optional[Exception] = None
-    # Primary, attempt 1 + retry.
-    for attempt in range(2):
-        try:
-            text, in_tok, out_tok = _ollama_ocr_call(
-                page_bytes,
-                model=primary,
-                base_url=base_url,
-                timeout=timeout,
-                prompt=prompt_override or _prompt_for_model(primary),
-                poster=poster,
-            )
-            return text, primary, in_tok, out_tok, 0.0
-        except OcrError as e:
-            last_err = e
-            log.warning("page %d %s attempt %d failed: %s", page_idx, primary, attempt + 1, e)
-    # Fallback model, single attempt.
-    if fallback and fallback != primary:
-        try:
-            text, in_tok, out_tok = _ollama_ocr_call(
-                page_bytes,
-                model=fallback,
-                base_url=base_url,
-                timeout=timeout,
-                prompt=prompt_override or _prompt_for_model(fallback),
-                poster=poster,
-            )
-            log.info("page %d recovered via fallback model %s", page_idx, fallback)
-            return text, fallback, in_tok, out_tok, 0.0
-        except OcrError as e:
-            last_err = e
-            log.warning("page %d fallback %s failed: %s", page_idx, fallback, e)
+    fast_timeout = min(
+        int(os.environ.get(
+            "LOCAL_VLM_FIRST_ATTEMPT_TIMEOUT",
+            str(LOCAL_FIRST_ATTEMPT_TIMEOUT_DEFAULT),
+        )),
+        timeout,
+    )
+
+    if _circuit_is_tripped():
+        log.debug("page %d: skipping local (circuit tripped)", page_idx)
+    else:
+        # Primary, attempt 1 (fast) + attempt 2 (full timeout).
+        per_attempt_timeouts = [fast_timeout, timeout]
+        for attempt, attempt_timeout in enumerate(per_attempt_timeouts):
+            try:
+                text, in_tok, out_tok = _ollama_ocr_call(
+                    page_bytes,
+                    model=primary,
+                    base_url=base_url,
+                    timeout=attempt_timeout,
+                    prompt=prompt_override or _prompt_for_model(primary),
+                    poster=poster,
+                )
+                _circuit_record_success()
+                return text, primary, in_tok, out_tok, 0.0
+            except OcrError as e:
+                last_err = e
+                _circuit_record_failure()
+                log.warning("page %d %s attempt %d failed (timeout=%ds): %s",
+                            page_idx, primary, attempt + 1, attempt_timeout, e)
+                if _circuit_is_tripped():
+                    # Trip happened mid-page — abandon further local attempts.
+                    log.warning("page %d: circuit tripped mid-page, skipping fallback model", page_idx)
+                    break
+        else:
+            # for-else: only entered if loop completed without break (i.e. circuit
+            # not tripped). Fallback model, single attempt.
+            if fallback and fallback != primary:
+                try:
+                    text, in_tok, out_tok = _ollama_ocr_call(
+                        page_bytes,
+                        model=fallback,
+                        base_url=base_url,
+                        timeout=timeout,
+                        prompt=prompt_override or _prompt_for_model(fallback),
+                        poster=poster,
+                    )
+                    _circuit_record_success()
+                    log.info("page %d recovered via fallback model %s", page_idx, fallback)
+                    return text, fallback, in_tok, out_tok, 0.0
+                except OcrError as e:
+                    last_err = e
+                    _circuit_record_failure()
+                    log.warning("page %d fallback %s failed: %s", page_idx, fallback, e)
+
     # Last-resort: Claude Haiku for this page only. Opt-in via env var.
     if haiku_page_fallback:
         try:
             caller = haiku_caller if haiku_caller is not None else _default_haiku_page_call
-            haiku_result = caller(page_bytes, "image/png")
+            # Pass the actual page media type — for PDFs PyMuPDF rendered the
+            # pages to PNG, but for raw image inputs the bytes are still in
+            # their original format (jpg/png/etc.). Hardcoding image/png made
+            # Haiku reject genuine JPEG bytes with a 400 invalid_request_error.
+            haiku_result = caller(page_bytes, page_media_type)
             log.info("page %d recovered via Haiku page fallback (cost $%.4f)",
                      page_idx, haiku_result.cost_usd)
             return (haiku_result.text, haiku_result.model,
@@ -475,6 +661,16 @@ def _ollama_ocr_call(
         "images": [b64],
         "stream": False,
         "options": {"temperature": 0.0},
+        # The Ollama host (LABCOMPUTER) is a shared workstation: the same RTX
+        # 3090 Ti also serves Medit Link, Asiga Composer, Ceramill, Open
+        # Dental, browser GPU acceleration, etc. qwen2.5vl:7b alone holds
+        # ~17 GB of the card's 24 GB while loaded. With the default 5-minute
+        # keep_alive (or worse, longer) staff hit VRAM contention during the
+        # day. Override per-request so the model unloads quickly after a
+        # batch burst ends, giving the rest of the box its VRAM back.
+        # During an active backfill (workers=4, calls back-to-back) any value
+        # >= a few seconds keeps the model warm across docs.
+        "keep_alive": os.environ.get("LOCAL_VLM_KEEP_ALIVE", "30s"),
     }
     url = f"{base_url}/api/generate"
     result = poster(url, body, timeout)
@@ -512,6 +708,78 @@ def _default_pdf_renderer(file_bytes: bytes, *, dpi: int) -> list[bytes]:
     """Real PDF renderer via preprocessing.pdf_render. Tests inject their own."""
     from preprocessing.pdf_render import render_pdf_pages
     return render_pdf_pages(file_bytes, dpi=dpi)
+
+
+# ---------------------------------------------------------------------------
+# Warmup
+# ---------------------------------------------------------------------------
+
+# A 448x448 fully-white PNG. qwen2.5vl rejects images smaller than ~224px
+# with "model runner unexpectedly stopped"; 448 is the standard ViT input
+# resolution and avoids that crash path. Encoded inline (~2KB after base64)
+# so warmup has no filesystem dependency.
+_WARMUP_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAcAAAAHACAIAAAC6Ry8kAAAACXBIWXMAAA7EAAAOxAGVKw4b"
+    + "A" * 100  # placeholder, replaced below with real bytes generated at import
+)
+
+
+def _build_warmup_png() -> str:
+    """Generate the warmup PNG at import time so the inlined bytes can't drift
+    from a working PNG. Falls back to None if pymupdf isn't available — the
+    warmup will then no-op cleanly."""
+    try:
+        import pymupdf  # type: ignore[import-not-found]
+    except Exception:
+        return ""
+    pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 448, 448))
+    pix.set_rect(pix.irect, (255, 255, 255))
+    return base64.b64encode(pix.tobytes("png")).decode("ascii")
+
+
+_WARMUP_PNG_B64 = _build_warmup_png() or _WARMUP_PNG_B64
+
+
+def warmup_local_vlm(
+    *,
+    model: Optional[str] = None,
+    base_url: Optional[str] = None,
+    timeout: int = 90,
+    max_attempts: int = 3,
+    http_post=None,
+) -> tuple[bool, Optional[str]]:
+    """Send a tiny dummy image to the local VLM so the cold-load failure
+    (GGML_ASSERT on qwen2.5vl's first call after model load) gets absorbed
+    here instead of wasting time on a real page.
+
+    Returns (ok, error_message). ok=True if any attempt succeeded; ok=False if
+    every attempt raised. Either way the caller can proceed — a False return
+    just signals "the warmup didn't help, expect the real first page may still
+    fail and fall through to the fallback model".
+    """
+    base = (base_url or os.environ.get("LOCAL_VLM_BASE_URL", LOCAL_BASE_URL_DEFAULT)).rstrip("/")
+    primary = model or os.environ.get("LOCAL_VLM_PRIMARY", LOCAL_PRIMARY_DEFAULT)
+    poster = http_post if http_post is not None else _default_ollama_post
+
+    img_bytes = base64.b64decode(_WARMUP_PNG_B64)
+    last_err: Optional[str] = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            text, _, _ = _ollama_ocr_call(
+                img_bytes,
+                model=primary, base_url=base, timeout=timeout,
+                prompt="Reply with 'ok'.",
+                poster=poster,
+            )
+            log.info("warmup_local_vlm: %s ready (attempt %d)", primary, attempt)
+            return True, None
+        except Exception as e:
+            last_err = f"{type(e).__name__}: {e}"
+            log.warning("warmup_local_vlm: %s attempt %d failed: %s",
+                        primary, attempt, last_err)
+    log.warning("warmup_local_vlm: %s did not warm up after %d attempts; "
+                "real pages may need fallback model", primary, max_attempts)
+    return False, last_err
 
 
 # ---------------------------------------------------------------------------

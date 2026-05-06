@@ -18,8 +18,19 @@ from preprocessing.ocr_helper import (
     OcrResult,
     _ocr_via_local,
     _prompt_for_model,
+    health_check_local_vlm,
     ocr_bytes,
+    reset_circuit_breaker,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_circuit():
+    """Each test starts with a clean circuit-breaker state — failures from a
+    previous test must not leak into this one."""
+    reset_circuit_breaker()
+    yield
+    reset_circuit_breaker()
 
 
 # ---------------------------------------------------------------------------
@@ -47,7 +58,12 @@ class FakePoster:
 
     def __call__(self, url: str, body: dict, timeout: int) -> dict:
         model = body["model"]
-        self.calls.append({"url": url, "model": model, "prompt": body.get("prompt"), "n_images": len(body.get("images", []))})
+        self.calls.append({
+            "url": url, "model": model,
+            "prompt": body.get("prompt"),
+            "n_images": len(body.get("images", [])),
+            "keep_alive": body.get("keep_alive"),
+        })
         if model not in self.queue or not self.queue[model]:
             raise AssertionError(f"FakePoster: no scripted response for model={model!r}")
         item = self.queue[model].pop(0)
@@ -364,6 +380,71 @@ def test_haiku_page_fallback_disabled_by_default() -> None:
     assert haiku_called["n"] == 0
 
 
+def test_request_includes_default_keep_alive() -> None:
+    """Each /api/generate request carries keep_alive so the Ollama daemon
+    knows when to unload the model (LABCOMPUTER is a shared GPU; we don't
+    want qwen2.5vl holding 17 GB indefinitely)."""
+    poster = FakePoster()
+    poster.add_response(LOCAL_PRIMARY_DEFAULT, "ok")
+    _ocr_via_local(b"x", media_type="image/png", http_post=poster)
+    assert poster.calls[0]["keep_alive"] == "30s"
+
+
+def test_request_keep_alive_overridable_via_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOCAL_VLM_KEEP_ALIVE", "5m")
+    poster = FakePoster()
+    poster.add_response(LOCAL_PRIMARY_DEFAULT, "ok")
+    _ocr_via_local(b"x", media_type="image/png", http_post=poster)
+    assert poster.calls[0]["keep_alive"] == "5m"
+
+
+def test_haiku_page_fallback_uses_original_media_type_for_image() -> None:
+    """JPEG inputs that fall through to Haiku must declare image/jpeg, not
+    image/png. The earlier hardcoding made Haiku reject genuine JPEG bytes
+    with a 400 invalid_request_error."""
+    poster = FakePoster()
+    poster.add_failure(LOCAL_PRIMARY_DEFAULT, "p0 fail 1")
+    poster.add_failure(LOCAL_PRIMARY_DEFAULT, "p0 fail 2")
+    poster.add_failure(LOCAL_FALLBACK_DEFAULT, "p0 fallback fail")
+    captured: list[str] = []
+    def haiku_caller(page_bytes, media_type):
+        captured.append(media_type)
+        return _fake_haiku("haiku ok")(page_bytes, media_type)
+    res = _ocr_via_local(
+        b"\xff\xd8\xff\xe0fake-jpeg",  # SOI marker
+        media_type="image/jpeg",
+        http_post=poster,
+        haiku_page_fallback=True,
+        haiku_caller=haiku_caller,
+    )
+    assert res.text == "haiku ok"
+    # Critical assertion: Haiku saw image/jpeg, not image/png.
+    assert captured == ["image/jpeg"]
+
+
+def test_haiku_page_fallback_uses_png_for_pdf_rendered_pages() -> None:
+    """PDF inputs are rendered to PNG by PyMuPDF — the per-page media-type
+    should be image/png, regardless of the original application/pdf input."""
+    poster = FakePoster()
+    poster.add_failure(LOCAL_PRIMARY_DEFAULT, "fail 1")
+    poster.add_failure(LOCAL_PRIMARY_DEFAULT, "fail 2")
+    poster.add_failure(LOCAL_FALLBACK_DEFAULT, "fallback fail")
+    captured: list[str] = []
+    def haiku_caller(page_bytes, media_type):
+        captured.append(media_type)
+        return _fake_haiku("haiku ok")(page_bytes, media_type)
+    renderer = _renderer_for_pages(count=1)
+    res = _ocr_via_local(
+        b"%PDF-fake",
+        media_type="application/pdf",
+        http_post=poster, pdf_renderer=renderer,
+        haiku_page_fallback=True,
+        haiku_caller=haiku_caller,
+    )
+    assert res.text == "haiku ok"
+    assert captured == ["image/png"]
+
+
 def test_haiku_page_fallback_enabled_rescues_failed_page() -> None:
     poster = FakePoster()
     poster.add_failure(LOCAL_PRIMARY_DEFAULT, "fail 1")
@@ -457,3 +538,116 @@ def test_haiku_page_fallback_not_called_when_local_succeeds() -> None:
     assert res.text == "local handled it"
     assert res.cost_usd == 0.0
     assert haiku_called["n"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Circuit breaker (Fix #2)
+# ---------------------------------------------------------------------------
+
+def test_circuit_breaker_trips_after_consecutive_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Once N consecutive Ollama failures pile up across pages, subsequent
+    pages skip local entirely and go straight to Haiku."""
+    monkeypatch.setenv("LOCAL_VLM_CIRCUIT_TRIP_AFTER", "3")
+    poster = FakePoster()
+    # Page 0: fails 3x → trips breaker (3 = primary*2 + fallback*1)
+    poster.add_failure(LOCAL_PRIMARY_DEFAULT, "p0 fail 1")
+    poster.add_failure(LOCAL_PRIMARY_DEFAULT, "p0 fail 2")
+    poster.add_failure(LOCAL_FALLBACK_DEFAULT, "p0 fallback fail")
+    # Pages 1+ should NOT call Ollama at all — no responses scripted.
+    renderer = _renderer_for_pages(count=3)
+    res = _ocr_via_local(
+        b"%PDF-fake", media_type="application/pdf",
+        http_post=poster, pdf_renderer=renderer,
+        haiku_page_fallback=True,
+        haiku_caller=_fake_haiku("via haiku", cost=0.005),
+    )
+    # All 3 pages went through Haiku
+    assert res.cost_usd == pytest.approx(0.015)
+    # Only 3 Ollama calls (the page-0 failures); pages 1+2 skipped local entirely
+    assert len(poster.calls) == 3
+
+
+def test_circuit_breaker_resets_on_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A successful local call clears the consecutive-failure counter."""
+    monkeypatch.setenv("LOCAL_VLM_CIRCUIT_TRIP_AFTER", "3")
+    poster = FakePoster()
+    # Page 0: 1 primary failure then primary success — 1 failure recorded, then reset
+    poster.add_failure(LOCAL_PRIMARY_DEFAULT, "blip")
+    poster.add_response(LOCAL_PRIMARY_DEFAULT, "p0 ok")
+    # Page 1: 2 primary failures + fallback success — 2 failures, reset
+    poster.add_failure(LOCAL_PRIMARY_DEFAULT, "p1 fail 1")
+    poster.add_failure(LOCAL_PRIMARY_DEFAULT, "p1 fail 2")
+    poster.add_response(LOCAL_FALLBACK_DEFAULT, "p1 fallback ok")
+    # Page 2: 1 primary failure then primary success — total consecutive never hit 3
+    poster.add_failure(LOCAL_PRIMARY_DEFAULT, "p2 blip")
+    poster.add_response(LOCAL_PRIMARY_DEFAULT, "p2 ok")
+    renderer = _renderer_for_pages(count=3)
+    res = _ocr_via_local(
+        b"%PDF-fake", media_type="application/pdf",
+        http_post=poster, pdf_renderer=renderer,
+    )
+    assert "p0 ok" in res.text
+    assert "p1 fallback ok" in res.text
+    assert "p2 ok" in res.text
+    assert res.cost_usd == 0.0  # never hit Haiku
+
+
+def test_health_check_returns_ok_when_tags_endpoint_responds() -> None:
+    def fetcher(url, timeout):
+        assert url.endswith("/api/tags")
+        return 200, b'{"models":[]}'
+    healthy, detail = health_check_local_vlm(fetcher=fetcher)
+    assert healthy is True
+    assert detail == "ok"
+
+
+def test_health_check_trips_breaker_when_unreachable() -> None:
+    def fetcher(url, timeout):
+        raise ConnectionRefusedError("nope")
+    healthy, detail = health_check_local_vlm(fetcher=fetcher)
+    assert healthy is False
+    assert "unreachable" in detail
+    # Subsequent OCR call should skip local entirely
+    poster = FakePoster()
+    res = _ocr_via_local(
+        b"x", media_type="image/png", http_post=poster,
+        haiku_page_fallback=True,
+        haiku_caller=_fake_haiku("haiku rescue"),
+    )
+    assert res.text == "haiku rescue"
+    assert len(poster.calls) == 0  # zero Ollama calls — circuit pre-tripped
+
+
+def test_health_check_trips_breaker_on_non_200() -> None:
+    def fetcher(url, timeout):
+        return 503, b"service unavailable"
+    healthy, detail = health_check_local_vlm(fetcher=fetcher)
+    assert healthy is False
+    assert "503" in detail
+
+
+def test_first_attempt_uses_fast_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Attempt 1 should use the fast-timeout ceiling, attempt 2 the full one."""
+    monkeypatch.setenv("LOCAL_VLM_FIRST_ATTEMPT_TIMEOUT", "5")
+    captured_timeouts: list[int] = []
+
+    class _CapturingPoster:
+        def __init__(self) -> None:
+            self.attempt = 0
+        def __call__(self, url, body, timeout):
+            captured_timeouts.append(timeout)
+            self.attempt += 1
+            if self.attempt == 1:
+                raise OcrError("fast attempt timed out")
+            return {"response": "second attempt ok",
+                    "prompt_eval_count": 100, "eval_count": 50}
+
+    poster = _CapturingPoster()
+    res = _ocr_via_local(
+        b"x", media_type="image/png", http_post=poster, timeout=600,
+    )
+    assert res.text == "second attempt ok"
+    # Fast timeout first, full timeout on retry
+    assert captured_timeouts == [5, 600]
