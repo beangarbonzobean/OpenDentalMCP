@@ -33,7 +33,7 @@ from typing import Optional
 from flask import Blueprint, abort, jsonify, request, send_file, send_from_directory
 
 from preprocessing import document_text_cache as cache
-from preprocessing.path_resolver import resolve_doc_path
+from preprocessing.path_resolver import resolve_doc_path_with_fallback
 from preprocessing.pdf_render import render_pdf_pages
 
 
@@ -219,7 +219,7 @@ def api_doc_pdf(doc_num: int):
             return jsonify({"error": f"patient {row.PatNum} not found"}), 404
         lname = (rows[0].get("LName") or "").strip()
         fname = (rows[0].get("FName") or "").strip()
-        path = resolve_doc_path(row.PatNum, lname, fname, row.FileName)
+        path = resolve_doc_path_with_fallback(row.PatNum, lname, fname, row.FileName)
     except Exception as e:
         log.exception("ocr-review: failed to resolve path for doc %d", doc_num)
         return jsonify({"error": f"resolve_failed: {e}"}), 500

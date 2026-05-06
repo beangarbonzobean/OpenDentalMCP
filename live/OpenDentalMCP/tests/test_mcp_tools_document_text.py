@@ -98,6 +98,8 @@ def test_get_document_text_cache_miss_triggers_ocr(
         return real_ocr_one(doc, **kw)
 
     monkeypatch.setattr(idx, "ocr_one_document", stub_ocr_one)
+    # Disable the short-output floor for this test's tiny stub text.
+    monkeypatch.setattr(idx, "MIN_OK_CHARS", 0)
     res = tools_instance._get_document_text(99)
     assert res["success"] is True
     assert res["source"] == "fresh"

@@ -30,6 +30,10 @@ PREPROC_DIR = Path(__file__).resolve().parent.parent / "preprocessing"
 # scope where it's allowed. Each entry: (filename, function_name).
 _WRITE_OPEN_ALLOWLIST: set[tuple[str, str]] = {
     ("document_text_index.py", "_acquire_lock"),
+    # Debug capture path: only fires when DEBUG_OCR_CAPTURE_DIR is set in env.
+    # Writes a per-doc JSON snapshot of the OCR result to that directory for
+    # offline alignment work; never touches OD or the live cache.
+    ("document_text_index.py", "_debug_capture_doc_result"),
 }
 
 

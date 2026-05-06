@@ -12,6 +12,7 @@ import pytest
 from preprocessing.document_text_cache import (
     DocTextRow,
     cached_doc_nums,
+    find_ok_by_sha256,
     get_text,
     get_texts_for_patient,
     init_cache,
@@ -199,6 +200,66 @@ def test_prune_orphans_empty_input_is_noop(cache_path: Path) -> None:
         deleted = prune_orphans(conn, [])
         assert deleted == 0
         assert cached_doc_nums(conn) == {1, 2}
+
+
+def test_find_ok_by_sha256_basic(cache_path: Path) -> None:
+    """Basic dedup lookup: existing ok row with matching SHA returns it."""
+    with open_cache(cache_path) as conn:
+        put_text(conn, _row(doc_num=1, sha="aaaa", text="hello world from doc 1"))
+        hit = find_ok_by_sha256(conn, "aaaa")
+        assert hit is not None
+        assert hit.DocNum == 1
+        assert hit.Text == "hello world from doc 1"
+
+
+def test_find_ok_by_sha256_missing_returns_none(cache_path: Path) -> None:
+    with open_cache(cache_path) as conn:
+        put_text(conn, _row(doc_num=1, sha="aaaa", text="x" * 50))
+        assert find_ok_by_sha256(conn, "bbbb") is None
+
+
+def test_find_ok_by_sha256_skips_non_ok_rows(cache_path: Path) -> None:
+    """unreadable / error / unsupported rows must NOT be treated as dedup
+    sources — would propagate bad results."""
+    with open_cache(cache_path) as conn:
+        put_text(conn, _row(doc_num=1, sha="dup", status="unreadable", text=""))
+        put_text(conn, _row(doc_num=2, sha="dup", status="error", text=""))
+        put_text(conn, _row(doc_num=3, sha="dup", status="unsupported", text=""))
+        assert find_ok_by_sha256(conn, "dup") is None
+        # Now add an ok row — it should be returned
+        put_text(conn, _row(doc_num=4, sha="dup", text="real content here longer"))
+        hit = find_ok_by_sha256(conn, "dup")
+        assert hit is not None
+        assert hit.DocNum == 4
+
+
+def test_find_ok_by_sha256_returns_smallest_doc_num(cache_path: Path) -> None:
+    """When multiple ok rows share a SHA, deterministic order: oldest DocNum."""
+    with open_cache(cache_path) as conn:
+        put_text(conn, _row(doc_num=99, sha="x", text="row 99 content for sha"))
+        put_text(conn, _row(doc_num=10, sha="x", text="row 10 content for sha"))
+        put_text(conn, _row(doc_num=50, sha="x", text="row 50 content for sha"))
+        hit = find_ok_by_sha256(conn, "x")
+        assert hit is not None
+        assert hit.DocNum == 10
+
+
+def test_find_ok_by_sha256_empty_or_none_sha(cache_path: Path) -> None:
+    with open_cache(cache_path) as conn:
+        put_text(conn, _row(doc_num=1, sha="aaa", text="x" * 50))
+        assert find_ok_by_sha256(conn, "") is None
+
+
+def test_find_ok_by_sha256_min_chars_filter(cache_path: Path) -> None:
+    """min_text_chars guards against propagating very short ok rows."""
+    with open_cache(cache_path) as conn:
+        put_text(conn, _row(doc_num=1, sha="aaa", text="ok"))  # 2 chars
+        put_text(conn, _row(doc_num=2, sha="bbb", text="this is a longer ok row"))
+        # Default 1 returns the short one
+        assert find_ok_by_sha256(conn, "aaa") is not None
+        # Higher floor skips it
+        assert find_ok_by_sha256(conn, "aaa", min_text_chars=10) is None
+        assert find_ok_by_sha256(conn, "bbb", min_text_chars=10) is not None
 
 
 def test_concurrent_writes_no_corruption(cache_path: Path) -> None:

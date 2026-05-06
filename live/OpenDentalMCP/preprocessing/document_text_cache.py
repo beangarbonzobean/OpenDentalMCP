@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS doc_text (
     PageIndex     INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_doc_text_pat ON doc_text(PatNum);
+CREATE INDEX IF NOT EXISTS idx_doc_text_sha ON doc_text(Sha256) WHERE Sha256 IS NOT NULL;
 -- Indexes on Reviewed and OcrAt are created in _migrate_add_review_columns
 -- so they don't fire on legacy DBs that don't yet have those columns.
 
@@ -182,6 +183,13 @@ def _migrate_add_review_columns(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_doc_text_ocr_at   ON doc_text(OcrAt)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_doc_text_reviewed ON doc_text(Reviewed)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_doc_text_source   ON doc_text(Source)")
+    # Sha256 index powers the dedup fast-path in ocr_one_document — same file
+    # bytes across patients (form templates, reused consents) reuse the cached
+    # text instead of re-OCRing.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_doc_text_sha "
+        "ON doc_text(Sha256) WHERE Sha256 IS NOT NULL"
+    )
 
 
 @contextmanager
@@ -200,6 +208,37 @@ def get_text(conn: sqlite3.Connection, doc_num: int) -> Optional[DocTextRow]:
     cur = conn.execute(
         "SELECT * FROM doc_text WHERE DocNum = ?",
         (int(doc_num),),
+    )
+    r = cur.fetchone()
+    if not r:
+        return None
+    return _row_to_dataclass(r)
+
+
+def find_ok_by_sha256(
+    conn: sqlite3.Connection,
+    sha256: str,
+    *,
+    min_text_chars: int = 1,
+) -> Optional[DocTextRow]:
+    """Return the oldest (smallest DocNum) Status='ok' row matching this SHA.
+
+    Used by the dedup fast-path in ocr_one_document — when the same file bytes
+    appear under multiple DocNums (e.g. a consent template scanned for many
+    patients) the new doc reuses the cached text instead of re-OCRing.
+
+    `min_text_chars` lets the caller require a minimum non-trivial text length
+    so we don't propagate previously-bad cached results. Default 1 (any non-
+    empty Text qualifies; the MIN_OK_CHARS floor in ocr_one_document already
+    guarantees ok rows have substantive text, so 1 is a safe lower bound).
+    """
+    if not sha256:
+        return None
+    cur = conn.execute(
+        "SELECT * FROM doc_text "
+        "WHERE Sha256 = ? AND Status = 'ok' AND length(Text) >= ? "
+        "ORDER BY DocNum LIMIT 1",
+        (sha256, int(min_text_chars)),
     )
     r = cur.fetchone()
     if not r:
