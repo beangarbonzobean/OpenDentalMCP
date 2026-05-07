@@ -41,6 +41,43 @@ header .updated {
   font-size: 12px;
   margin-left: auto;
 }
+header button.refresh {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  color: var(--text);
+  padding: 4px 12px;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  margin-left: 12px;
+  transition: background 0.15s, border-color 0.15s;
+}
+header button.refresh:hover { background: rgba(255,255,255,0.04); border-color: var(--accent); }
+header button.refresh:active { background: rgba(255,255,255,0.08); }
+header button.refresh:disabled { opacity: 0.5; cursor: wait; }
+.bookmarklet {
+  display: inline-block;
+  background: var(--accent);
+  color: white;
+  padding: 2px 10px;
+  border-radius: 4px;
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 600;
+}
+.bookmarklet:hover { background: #1f6feb; }
+.stale-warn {
+  display: inline-block;
+  background: rgba(210, 153, 34, 0.18);
+  color: var(--warn);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  margin-left: 6px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
@@ -168,6 +205,7 @@ header .updated {
 <header>
   <h1>Utilization</h1>
   <span class="updated" id="updated">—</span>
+  <button class="refresh" id="btn-refresh" type="button" title="Re-poll GPU / pipeline / router (server-side)">Refresh</button>
 </header>
 
 <div class="grid">
@@ -235,8 +273,10 @@ header .updated {
 </div>
 
 <div class="refresh-hint" id="hint">
-  Claude usage is scraped from <code>claude.ai/settings/usage</code> via a Claude Code session running Chrome MCP.
-  To refresh: ask the assistant "scrape claude usage" — it loads the page, extracts text, POSTs to <code>/utilization/api/claude-snapshot</code>.
+  <strong>Refresh Claude usage in one click:</strong>
+  drag this <a class="bookmarklet" id="bookmarklet" href="#" onclick="event.preventDefault();alert('Drag this link to your bookmarks bar instead of clicking it here. Then click the bookmark while on claude.ai/settings/usage.')">Refresh Claude</a>
+  to your bookmarks bar. Click it whenever you're on <a href="https://claude.ai/settings/usage" target="_blank"><code>claude.ai/settings/usage</code></a> and it'll POST the scrape back to this dashboard automatically.
+  Alt: ask the assistant "scrape claude usage."
 </div>
 
 <script>
@@ -279,9 +319,24 @@ async function refresh() {
     setText('claude-session-pct', c.session_pct != null ? c.session_pct.toFixed(0) + '%' : '—');
     setBar('claude-session-fill', c.session_pct);
     setText('claude-session-resets', c.session_resets_in_text || '—');
-    setText('claude-session-note',
-      c.ts ? 'plan: ' + (c.plan || '?') + ' · scraped ' + fmtAge(c.ts)
-           : 'no scrape yet — ask the assistant to refresh');
+    // Compute scrape age and surface a STALE badge after 5 min so the user
+    // knows when to click the bookmarklet (or ask the assistant).
+    const claudeStale = c.ts && (Date.now() - new Date(c.ts).getTime()) > 5 * 60 * 1000;
+    const noteText = c.ts
+      ? 'plan: ' + (c.plan || '?') + ' · scraped ' + fmtAge(c.ts)
+      : 'no scrape yet — drag the Refresh Claude bookmarklet, or ask the assistant';
+    setText('claude-session-note', noteText);
+    const noteEl = document.getElementById('claude-session-note');
+    if (noteEl) {
+      // Remove any prior badge then maybe re-add
+      noteEl.querySelectorAll('.stale-warn').forEach(b => b.remove());
+      if (claudeStale) {
+        const badge = document.createElement('span');
+        badge.className = 'stale-warn';
+        badge.textContent = 'STALE';
+        noteEl.appendChild(badge);
+      }
+    }
 
     // Claude weekly
     setText('claude-weekly-all', pct(c.weekly_all_pct));
@@ -388,6 +443,46 @@ async function refresh() {
     setText('updated', 'fetch error: ' + e.message);
   }
 }
+
+// Wire up the manual refresh button
+const refreshBtn = document.getElementById('btn-refresh');
+if (refreshBtn) {
+  refreshBtn.addEventListener('click', async () => {
+    refreshBtn.disabled = true;
+    const original = refreshBtn.textContent;
+    refreshBtn.textContent = 'Refreshing...';
+    try { await refresh(); } finally {
+      refreshBtn.textContent = original;
+      refreshBtn.disabled = false;
+    }
+  });
+}
+
+// Build the bookmarklet href with this page's origin baked in, so the
+// fetch goes to the dashboard regardless of what page the bookmarklet
+// is clicked from. The bookmarklet itself runs in the OTHER page's
+// context (claude.ai), so it can't compute the dashboard origin at
+// click time — we hardcode it now.
+(function buildBookmarklet() {
+  const link = document.getElementById('bookmarklet');
+  if (!link) return;
+  const target = window.location.origin + '/utilization/api/claude-snapshot';
+  const code =
+    "(function(){" +
+      "fetch(" + JSON.stringify(target) + ",{" +
+        "method:'POST'," +
+        "headers:{'Content-Type':'text/plain'}," +
+        "body:document.body.innerText" +
+      "}).then(r=>r.json()).then(d=>{" +
+        "var n=document.createElement('div');" +
+        "n.style.cssText='position:fixed;top:20px;right:20px;background:#161b22;color:#e6edf3;border:1px solid #30363d;padding:10px 16px;border-radius:6px;font:14px sans-serif;z-index:99999';" +
+        "n.textContent='Dashboard updated - '+(d.fields_parsed||[]).length+' fields';" +
+        "document.body.appendChild(n);" +
+        "setTimeout(function(){n.remove()},2500)" +
+      "}).catch(function(e){alert('Refresh failed: '+e.message)});" +
+    "})()";
+  link.href = 'javascript:' + encodeURI(code);
+})();
 
 refresh();
 setInterval(refresh, 10000);
