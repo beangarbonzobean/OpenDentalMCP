@@ -38,7 +38,7 @@ SCENARIOS = [
         "profile": Profile(fits_local=False),
         "snap": QuotaSnapshot(session_pct=10, session_resets_in_text="1 hr",
                               api_extra_pct=5),
-        "expect_choice": ProviderChoice.CLAUDE_SUBPROCESS,
+        "expect_choice": ProviderChoice.CLAUDE_MAX,
     },
     # 4) Burn mode (<30 min to reset) → subprocess regardless
     {
@@ -46,7 +46,7 @@ SCENARIOS = [
         "profile": Profile(fits_local=False),
         "snap": QuotaSnapshot(session_pct=80, session_resets_in_text="20 min",
                               api_extra_pct=10),
-        "expect_choice": ProviderChoice.CLAUDE_SUBPROCESS,
+        "expect_choice": ProviderChoice.CLAUDE_MAX,
     },
     # 5) Normal headroom + not high-end + text → API (preserve Max for interactive)
     {
@@ -62,7 +62,7 @@ SCENARIOS = [
         "profile": Profile(fits_local=False, prefers_high_end=True),
         "snap": QuotaSnapshot(session_pct=80, session_resets_in_text="1 hr",
                               api_extra_pct=10),
-        "expect_choice": ProviderChoice.CLAUDE_SUBPROCESS,
+        "expect_choice": ProviderChoice.CLAUDE_MAX,
     },
     # 7) Conservative headroom + text → API
     {
@@ -78,7 +78,7 @@ SCENARIOS = [
         "profile": Profile(fits_local=False),
         "snap": QuotaSnapshot(session_pct=95, session_resets_in_text="3 hr",
                               api_extra_pct=99),
-        "expect_choice": ProviderChoice.CLAUDE_SUBPROCESS,
+        "expect_choice": ProviderChoice.CLAUDE_MAX,
     },
     # 9) Latency-sensitive → API (no subprocess overhead)
     {

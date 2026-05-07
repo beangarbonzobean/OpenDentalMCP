@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import asdict
 from typing import Optional
 
@@ -13,16 +14,26 @@ from inference_router import log_store, snapshot as snap_mod
 from inference_router.decision import Profile, ProviderChoice, RouteDecision, route
 from inference_router.providers.anthropic_api_provider import AnthropicAPIProvider
 from inference_router.providers.base import InferenceResult, Provider, ProviderError
+from inference_router.providers.claude_agent_sdk_provider import ClaudeAgentSDKProvider
 from inference_router.providers.claude_subprocess_provider import ClaudeSubprocessProvider
 from inference_router.providers.ollama_provider import OllamaProvider
 
 log = logging.getLogger(__name__)
 
 
+# Default provider per choice. CLAUDE_MAX uses the Agent SDK (low-overhead);
+# the subprocess implementation stays available as a manual override via
+# ROUTER_USE_SUBPROCESS=1 for debugging.
+def _claude_max_provider() -> Provider:
+    if os.environ.get("ROUTER_USE_SUBPROCESS") == "1":
+        return ClaudeSubprocessProvider()
+    return ClaudeAgentSDKProvider()
+
+
 _PROVIDERS: dict[ProviderChoice, Provider] = {
     ProviderChoice.LOCAL_OLLAMA: OllamaProvider(),
     ProviderChoice.ANTHROPIC_API: AnthropicAPIProvider(),
-    ProviderChoice.CLAUDE_SUBPROCESS: ClaudeSubprocessProvider(),
+    ProviderChoice.CLAUDE_MAX: _claude_max_provider(),
 }
 
 

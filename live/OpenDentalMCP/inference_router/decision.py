@@ -35,7 +35,7 @@ from inference_router.velocity import BurnMode, assess_session
 
 class ProviderChoice(str, Enum):
     LOCAL_OLLAMA = "local_ollama"
-    CLAUDE_SUBPROCESS = "claude_subprocess"
+    CLAUDE_MAX = "claude_max"
     ANTHROPIC_API = "anthropic_api"
     GEMINI_API = "gemini_api"
     UNAVAILABLE = "unavailable"
@@ -79,7 +79,7 @@ def route(profile: Profile, *, snap: Optional[snap_mod.QuotaSnapshot] = None) ->
 
     # 1. Local first if we can — it's free and idle GPU is always wasted.
     if profile.fits_local:
-        fallbacks = [ProviderChoice.CLAUDE_SUBPROCESS, ProviderChoice.ANTHROPIC_API]
+        fallbacks = [ProviderChoice.CLAUDE_MAX, ProviderChoice.ANTHROPIC_API]
         return RouteDecision(
             choice=ProviderChoice.LOCAL_OLLAMA,
             reasoning="profile fits local; sunk-cost GPU is always preferred",
@@ -102,7 +102,7 @@ def route(profile: Profile, *, snap: Optional[snap_mod.QuotaSnapshot] = None) ->
         # Burn mode: reset imminent, use what's left even for high-end work.
         if headroom.mode == BurnMode.BURN_IT:
             return RouteDecision(
-                choice=ProviderChoice.CLAUDE_SUBPROCESS,
+                choice=ProviderChoice.CLAUDE_MAX,
                 reasoning=f"BURN MODE — {headroom.explanation}",
                 burn_mode=headroom.mode,
                 fallback_chain=fallbacks,
@@ -111,7 +111,7 @@ def route(profile: Profile, *, snap: Optional[snap_mod.QuotaSnapshot] = None) ->
         # Aggressive: Max wide open, prefer it for non-trivial work.
         if headroom.mode == BurnMode.AGGRESSIVE:
             return RouteDecision(
-                choice=ProviderChoice.CLAUDE_SUBPROCESS,
+                choice=ProviderChoice.CLAUDE_MAX,
                 reasoning=f"AGGRESSIVE — {headroom.explanation}",
                 burn_mode=headroom.mode,
                 fallback_chain=fallbacks,
@@ -120,7 +120,7 @@ def route(profile: Profile, *, snap: Optional[snap_mod.QuotaSnapshot] = None) ->
         # Normal mode: route to Max for high-end requests, otherwise let it fall through.
         if headroom.mode == BurnMode.NORMAL and profile.prefers_high_end:
             return RouteDecision(
-                choice=ProviderChoice.CLAUDE_SUBPROCESS,
+                choice=ProviderChoice.CLAUDE_MAX,
                 reasoning=f"NORMAL + prefers_high_end — {headroom.explanation}",
                 burn_mode=headroom.mode,
                 fallback_chain=fallbacks,
@@ -135,7 +135,7 @@ def route(profile: Profile, *, snap: Optional[snap_mod.QuotaSnapshot] = None) ->
         fallbacks = [ProviderChoice.UNAVAILABLE]
         # Note Claude subprocess as a last-ditch even if conservative
         if can_use_max and headroom.mode == BurnMode.CONSERVATIVE:
-            fallbacks = [ProviderChoice.CLAUDE_SUBPROCESS, ProviderChoice.UNAVAILABLE]
+            fallbacks = [ProviderChoice.CLAUDE_MAX, ProviderChoice.UNAVAILABLE]
         reasoning = (
             "image present — subprocess provider doesn't support images in v1"
             if profile.has_image
@@ -156,7 +156,7 @@ def route(profile: Profile, *, snap: Optional[snap_mod.QuotaSnapshot] = None) ->
     # If conservative-mode Max IS still available, dip into it as last resort.
     if can_use_max:
         return RouteDecision(
-            choice=ProviderChoice.CLAUDE_SUBPROCESS,
+            choice=ProviderChoice.CLAUDE_MAX,
             reasoning=f"API at cap ({snap.api_extra_pct:.0f}%); using Max despite conservative",
             burn_mode=headroom.mode,
             fallback_chain=[ProviderChoice.UNAVAILABLE],
