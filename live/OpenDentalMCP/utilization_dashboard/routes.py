@@ -28,7 +28,15 @@ from pathlib import Path
 
 from flask import Blueprint, abort, jsonify, request, send_from_directory
 
-from utilization_dashboard import gpu_poller, pipeline_poller, scraper, storage
+from utilization_dashboard import (
+    context_bundler,
+    gpu_poller,
+    pipeline_poller,
+    projects_poller,
+    projects_storage,
+    scraper,
+    storage,
+)
 
 log = logging.getLogger(__name__)
 
@@ -97,9 +105,93 @@ def index():
     return send_from_directory(STATIC_DIR, "index.html")
 
 
+@utilization_bp.get("/projects/")
+def projects_index():
+    return send_from_directory(STATIC_DIR, "projects.html")
+
+
 @utilization_bp.get("/<path:filename>")
 def static_assets(filename: str):
     return send_from_directory(STATIC_DIR, filename)
+
+
+# ---------------------------------------------------------------------------
+# Projects API
+# ---------------------------------------------------------------------------
+
+@utilization_bp.get("/api/projects/snapshot")
+def api_projects_snapshot():
+    """Per-project health + cached next-steps for the projects panel."""
+    statuses = projects_poller.status_all()
+    cached = projects_storage.latest_all()
+    for s in statuses:
+        s["next_steps"] = cached.get(s["id"])
+    return jsonify({"projects": statuses})
+
+
+@utilization_bp.post("/api/projects/<project_id>/refresh-next-steps")
+def api_refresh_next_steps(project_id: str):
+    """Bundle context for `project_id`, dispatch via inference_router with a
+    Sonnet-preferring Profile, store the markdown result, return the new row.
+    """
+    registry = projects_poller.load_registry()
+    project = next((p for p in registry if p.get("id") == project_id), None)
+    if not project:
+        return jsonify({"error": f"unknown project_id: {project_id}"}), 404
+
+    prompt, summary = context_bundler.build(project)
+
+    try:
+        from inference_router import Profile, dispatch
+    except ImportError:
+        return jsonify({"error": "inference_router not installed"}), 500
+
+    try:
+        result = dispatch(
+            Profile(
+                fits_local=False,
+                prefers_high_end=True,           # nudge toward Sonnet hint
+                tag=f"project-next-steps:{project_id}",
+                max_output_tokens=900,
+            ),
+            prompt,
+            max_tokens=900,
+            timeout=180,
+        )
+    except Exception as e:
+        log.exception("dispatch failed for %s: %s", project_id, e)
+        return jsonify({"error": f"dispatch failed: {type(e).__name__}: {e}"}), 502
+
+    ts = projects_storage.write(
+        project_id,
+        content=result.text,
+        model_used=result.model,
+        provider_used=result.provider,
+        latency_ms=result.latency_ms,
+        cost_usd=result.cost_usd,
+        bundle_summary={
+            "repo_files_included": summary.repo_files_included,
+            "memory_files_included": summary.memory_files_included,
+            "git_commits_included": summary.git_commits_included,
+            "log_lines_included": summary.log_lines_included,
+            "total_chars": summary.total_chars,
+        },
+    )
+    return jsonify({
+        "ok": True,
+        "ts": ts,
+        "project_id": project_id,
+        "content": result.text,
+        "provider": result.provider,
+        "model": result.model,
+        "latency_ms": result.latency_ms,
+        "bundle_summary": {
+            "repo_files_included": summary.repo_files_included,
+            "memory_files_included": summary.memory_files_included,
+            "git_commits_included": summary.git_commits_included,
+            "log_lines_included": summary.log_lines_included,
+        },
+    })
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Projects</title>
+<style>
+:root {
+  --bg: #0e1116;
+  --panel: #161b22;
+  --panel-border: #30363d;
+  --text: #e6edf3;
+  --text-dim: #8b949e;
+  --accent: #2f81f7;
+  --good: #2ea043;
+  --warn: #d29922;
+  --bad: #f85149;
+  --neutral: #6e7681;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+header {
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--panel-border);
+  display: flex; align-items: baseline; gap: 16px;
+}
+header h1 { margin: 0; font-size: 16px; font-weight: 600; }
+header nav a { color: var(--text-dim); text-decoration: none; font-size: 13px; margin-right: 14px; }
+header nav a:hover { color: var(--text); }
+header nav a.active { color: var(--text); border-bottom: 2px solid var(--accent); padding-bottom: 2px; }
+header .updated { color: var(--text-dim); font-size: 12px; margin-left: auto; }
+
+.domain {
+  margin: 18px 14px 6px;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: 14px;
+  padding: 0 14px 20px;
+}
+.card {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 16px;
+  display: flex; flex-direction: column;
+}
+.card h2 { margin: 0 0 4px; font-size: 14px; font-weight: 600;
+  display: flex; align-items: center; gap: 8px; }
+.card .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.card .desc { color: var(--text-dim); font-size: 12px; margin: 6px 0 10px; line-height: 1.45; }
+.card .meta { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px;
+  font-size: 12px; color: var(--text-dim); }
+.card .meta .v { color: var(--text); font-variant-numeric: tabular-nums; }
+.card .next { margin-top: 12px; border-top: 1px solid var(--panel-border); padding-top: 10px; }
+.card .next h3 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  display: flex; justify-content: space-between; align-items: baseline;
+}
+.card .next-content { font-size: 13px; line-height: 1.5; }
+.card .next-content ul { padding-left: 20px; margin: 4px 0; }
+.card .next-content li { margin: 4px 0; }
+.card .next-content em { color: var(--text-dim); font-style: normal; }
+
+.status-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  display: inline-block;
+}
+.status-green   { background: var(--good); }
+.status-yellow  { background: var(--warn); }
+.status-red     { background: var(--bad); }
+.status-unknown { background: var(--neutral); }
+
+.tag {
+  font-size: 10px; padding: 1px 6px; border-radius: 3px;
+  background: rgba(255,255,255,0.06);
+  color: var(--text-dim);
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+}
+.tag.phase { background: rgba(47, 129, 247, 0.12); color: var(--accent); }
+
+button.refresh-ns {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+button.refresh-ns:hover { color: var(--text); border-color: var(--accent); }
+button.refresh-ns:disabled { opacity: 0.5; cursor: wait; }
+.next-meta { font-size: 10px; color: var(--text-dim); margin-top: 6px; }
+.bullet-error { color: var(--bad); }
+</style>
+</head>
+
+<body>
+<header>
+  <h1>Projects</h1>
+  <nav>
+    <a href="/utilization/">Utilization</a>
+    <a href="/utilization/projects/" class="active">Projects</a>
+  </nav>
+  <span class="updated" id="updated">—</span>
+</header>
+
+<div id="domains"></div>
+
+<script>
+function fmtAge(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d)) return '—';
+  const ago = (Date.now() - d.getTime()) / 1000;
+  if (ago < 60) return Math.round(ago) + 's ago';
+  if (ago < 3600) return Math.round(ago / 60) + 'm ago';
+  if (ago < 86400) return Math.round(ago / 3600) + 'h ago';
+  return Math.round(ago / 86400) + 'd ago';
+}
+
+function statusClass(level) {
+  return 'status-' + (level || 'unknown');
+}
+
+// Tiny markdown renderer — bullet list + simple inline. We only ask Claude
+// for bullets, so this is enough; we fall back to raw text for anything else.
+function renderMarkdown(md) {
+  if (!md) return '<em>No recommendations yet — click Refresh.</em>';
+  const lines = md.trim().split('\n');
+  const out = [];
+  let inList = false;
+  for (const raw of lines) {
+    const ln = raw.trimEnd();
+    if (/^\s*[-*]\s+/.test(ln)) {
+      if (!inList) { out.push('<ul>'); inList = true; }
+      out.push('<li>' + escape(ln.replace(/^\s*[-*]\s+/, '')) + '</li>');
+    } else if (ln.trim() === '') {
+      if (inList) { out.push('</ul>'); inList = false; }
+    } else {
+      if (inList) { out.push('</ul>'); inList = false; }
+      out.push('<div>' + escape(ln) + '</div>');
+    }
+  }
+  if (inList) out.push('</ul>');
+  return out.join('');
+}
+function escape(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function bundleSummaryLine(b) {
+  if (!b) return '';
+  const parts = [];
+  if (b.repo_files_included && b.repo_files_included.length)
+    parts.push(b.repo_files_included.length + ' repo file(s)');
+  if (b.memory_files_included && b.memory_files_included.length)
+    parts.push(b.memory_files_included.length + ' memory note(s)');
+  if (b.git_commits_included)
+    parts.push(b.git_commits_included + ' commit(s)');
+  if (b.log_lines_included)
+    parts.push(b.log_lines_included + ' log line(s)');
+  return parts.join(' · ');
+}
+
+function buildCard(p) {
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.dataset.projectId = p.id;
+
+  const reason = p.overall_reason ? p.overall_reason : '';
+
+  const lastCommit = p.health && p.health.last_commit_age_days != null
+    ? p.health.last_commit_age_days.toFixed(1) + 'd'
+    : '—';
+  const logAge = p.health && p.health.log_age_hours != null
+    ? p.health.log_age_hours.toFixed(1) + 'h'
+    : '—';
+
+  card.innerHTML = `
+    <h2>
+      <span class="status-dot ${statusClass(p.overall)}"></span>
+      ${escape(p.name)}
+      <span class="tag phase">${escape(p.phase || '')}</span>
+    </h2>
+    <div class="row" style="font-size:12px;color:var(--text-dim);">
+      ${escape(reason)}
+    </div>
+    <div class="desc">${escape(p.description || '')}</div>
+    <div class="meta">
+      <div>service</div>           <div class="v">${escape((p.health && p.health.service) || '—')} ${escape((p.health && p.health.service_status) || '')}</div>
+      <div>last commit</div>       <div class="v">${lastCommit}${p.health && p.health.last_commit_subject ? ' — ' + escape(p.health.last_commit_subject) : ''}</div>
+      <div>log freshness</div>     <div class="v">${logAge}</div>
+      <div>repo path</div>         <div class="v">${escape(p.repo_path)}</div>
+    </div>
+    <div class="next">
+      <h3>
+        <span>Next steps</span>
+        <button class="refresh-ns" data-project-id="${escape(p.id)}">Refresh</button>
+      </h3>
+      <div class="next-content" id="ns-${escape(p.id)}">${renderMarkdown(p.next_steps && p.next_steps.content)}</div>
+      <div class="next-meta" id="ns-meta-${escape(p.id)}">
+        ${p.next_steps && p.next_steps.ts
+          ? `generated ${fmtAge(p.next_steps.ts)} via ${escape(p.next_steps.provider_used || '')} (${escape(p.next_steps.model_used || '')}); ${bundleSummaryLine(p.next_steps.bundle_summary)}`
+          : ''}
+      </div>
+    </div>
+  `;
+
+  card.querySelector('button.refresh-ns').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true; const orig = btn.textContent;
+    btn.textContent = 'Generating…';
+    const target = document.getElementById('ns-' + p.id);
+    target.innerHTML = '<em>Asking Claude (this can take 30-60s)…</em>';
+    try {
+      const r = await fetch(`/utilization/api/projects/${encodeURIComponent(p.id)}/refresh-next-steps`,
+                            { method: 'POST' });
+      const d = await r.json();
+      if (!r.ok || d.error) {
+        target.innerHTML = `<div class="bullet-error">${escape(d.error || 'failed')}</div>`;
+      } else {
+        target.innerHTML = renderMarkdown(d.content);
+        document.getElementById('ns-meta-' + p.id).textContent =
+          `generated just now via ${d.provider || ''} (${d.model || ''}); ${bundleSummaryLine(d.bundle_summary)}`;
+      }
+    } catch (err) {
+      target.innerHTML = `<div class="bullet-error">${escape(err.message || err)}</div>`;
+    } finally {
+      btn.textContent = orig; btn.disabled = false;
+    }
+  });
+
+  return card;
+}
+
+async function refresh() {
+  try {
+    const r = await fetch('/utilization/api/projects/snapshot', { cache: 'no-store' });
+    if (!r.ok) throw new Error('snapshot ' + r.status);
+    const d = await r.json();
+    const root = document.getElementById('domains');
+    root.innerHTML = '';
+
+    // Group by domain, preserving order of first appearance
+    const byDomain = new Map();
+    for (const p of d.projects || []) {
+      const k = p.domain || '';
+      if (!byDomain.has(k)) byDomain.set(k, []);
+      byDomain.get(k).push(p);
+    }
+
+    for (const [domain, projs] of byDomain) {
+      const h = document.createElement('div');
+      h.className = 'domain';
+      h.textContent = domain || '(uncategorized)';
+      root.appendChild(h);
+      const grid = document.createElement('div');
+      grid.className = 'grid';
+      for (const p of projs) grid.appendChild(buildCard(p));
+      root.appendChild(grid);
+    }
+
+    document.getElementById('updated').textContent =
+      'updated ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    document.getElementById('updated').textContent = 'fetch error: ' + e.message;
+  }
+}
+
+refresh();
+setInterval(refresh, 30000);
+</script>
+</body>
+</html>

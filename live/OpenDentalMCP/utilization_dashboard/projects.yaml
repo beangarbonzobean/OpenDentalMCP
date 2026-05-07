@@ -1,0 +1,116 @@
+# Project portfolio registry — drives the /utilization/projects/ view.
+#
+# Each entry describes one project: identity, where it lives on disk, what
+# "running" means for it, and where to pull notes from when generating
+# "next steps" via the inference router.
+#
+# Add / remove freely. The dashboard reads this on every request.
+
+projects:
+
+  - id: opendental_mcp
+    name: OpenDental MCP
+    domain: OpenDental
+    phase: deployed
+    description: |
+      Main MCP server for the Open Dental REST API. Hosts the intake / OCR /
+      np-tracker / chart-audit / utilization Flask blueprints. Nightly OCR
+      rebuild and intake auto-filing run from here.
+    repo_path: live/OpenDentalMCP
+    health:
+      service: OpenDentalMCPServer
+      log_path: live/OpenDentalMCP/mcp_server_http.log
+      log_stale_after_hours: 6
+    notes_sources:
+      - repo:README.md
+      - repo:HANDOFF_image_ocr_mcp_tool.md
+      - memory:project_opendental_mcp_infra
+      - memory:project_opendental_code_patterns
+      - memory:project_opendental_task_api
+      - memory:project_intake_shadow_mode
+      - memory:project_inference_router
+
+  - id: dexis_monitor
+    name: DEXISMonitor
+    domain: DEXIS
+    phase: deployed
+    description: |
+      DEXIS image-monitor MCP — exposes patient x-ray queries to AI agents,
+      watches DEXIS_DATA SQL Server, surfaces recent x-rays + statistics.
+    repo_path: live/DEXISMonitor
+    health:
+      service: DEXISMCPHTTPServer
+      log_path: live/DEXISMonitor/mcp_server_http.log
+      log_stale_after_hours: 24
+    notes_sources:
+      - repo:README.md
+
+  - id: knowledge_mcp
+    name: KnowledgeMCP
+    domain: Knowledge
+    phase: deployed
+    description: |
+      Knowledge-base MCP — indexes practice docs / memories and serves them
+      to AI agents as a search/retrieval surface.
+    repo_path: live/KnowledgeMCP
+    health:
+      service: KnowledgeMCPServer
+      log_path: live/KnowledgeMCP/mcp_server_http.log
+      log_stale_after_hours: 24
+    notes_sources:
+      - repo:README.md
+
+  - id: windows_admin_mcp
+    name: WindowsAdminMCP
+    domain: Operations
+    phase: deployed
+    description: |
+      Windows admin tooling MCP — fleet-deployable, exposes services / sshd /
+      firewall / share / processes / SMB tools to AI agents. Used to operate
+      the rest of the fleet.
+    repo_path: live/WindowsAdminMCP
+    health:
+      service: WindowsAdminMCPServer
+      log_path: live/WindowsAdminMCP/mcp_server_http.log
+      log_stale_after_hours: 24
+    notes_sources:
+      - repo:README.md
+      - repo:FLEET_DEPLOY.md
+
+  - id: service_admin
+    name: Service Admin
+    domain: Operations
+    phase: deployed
+    description: |
+      Service control + patient-recovery scripts. Embedded under the
+      OpenDentalMCP venv. Recovers PatNum-keyed records when the OD Update
+      lock corrupts state.
+    repo_path: live/service_admin
+    health:
+      # No NSSM service of its own — runs as a Python process when invoked.
+      # Treat as "manual" for now; add a process check later if useful.
+      service: null
+      log_path: live/service_admin/admin_stdout.log
+      log_stale_after_hours: 720   # rarely run, don't alarm
+    notes_sources:
+      - repo:README.md
+
+  - id: miyo_calibration
+    name: MiYO Calibration
+    domain: Lab
+    phase: deployed
+    description: |
+      Calibration HTTP server for the MiYO ceramist team — port 8765, NSSM,
+      tailscale-only. Lead user: Kalie Peace (per memory). Used daily by the
+      lab for shade reproducibility.
+    repo_path: live/MiYOCalibration
+    health:
+      service: MiYOCalibrationServer
+      log_path: live/MiYOCalibration/mcp_server_http.log
+      log_stale_after_hours: 24
+    notes_sources:
+      - repo:README.md
+      - repo:AUDIT_AND_DISPATCH.md
+      - repo:MODULE_SPLIT_PLAN.md
+      - memory:project_miyo_calibration
+      - memory:project_miyo_team
