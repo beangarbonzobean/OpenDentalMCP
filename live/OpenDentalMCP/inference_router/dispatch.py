@@ -73,6 +73,7 @@ def dispatch(
             result = provider.call(
                 prompt,
                 images=images,
+                model_hint=decision.model_hint if idx == 0 else None,
                 max_tokens=max_tokens,
                 timeout=timeout,
             )

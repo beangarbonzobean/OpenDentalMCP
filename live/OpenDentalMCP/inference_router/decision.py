@@ -61,6 +61,8 @@ class RouteDecision:
     reasoning: str                     # one-liner: why this provider
     burn_mode: BurnMode
     fallback_chain: list[ProviderChoice] = field(default_factory=list)
+    model_hint: Optional[str] = None   # e.g. "claude-sonnet-4-5" when Sonnet
+                                       # weekly bar has headroom
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +71,34 @@ class RouteDecision:
 
 API_AT_CAP_PCT = 95.0   # treat API as exhausted above this % of $100 cap
 MAX_SESSION_FULL_PCT = 99.0  # >this means session is effectively maxed
+SONNET_TIGHT_PCT = 80.0  # above this % of weekly Sonnet cap, stop hinting Sonnet
+
+import os
+SONNET_MODEL_NAME = os.environ.get("ROUTER_SONNET_MODEL", "claude-sonnet-4-5")
+
+
+def _sonnet_hint(snap: snap_mod.QuotaSnapshot, profile: Profile) -> Optional[str]:
+    """Decide whether to ask the SDK provider for Sonnet specifically.
+
+    Reasoning: the user's Sonnet weekly cap is its own bucket, separate from
+    the All-models bucket. If Sonnet is sitting at 0% and the weekly reset is
+    a few days away, that's perishable pre-paid quota — burn some on tasks
+    that benefit from Sonnet quality (any prefers_high_end profile).
+
+    Returns the model name to hint, or None to let the SDK use its default.
+    """
+    sonnet_pct = snap.weekly_sonnet_pct
+    if sonnet_pct is None:
+        # No scrape data — don't hint anything specific.
+        return None
+    if sonnet_pct >= SONNET_TIGHT_PCT:
+        # Sonnet weekly is mostly used up — don't add to it.
+        return None
+    if profile.prefers_high_end or sonnet_pct < 50.0:
+        # Either the caller wants high-end, or there's serious headroom
+        # waiting to expire. Either way, ask for Sonnet.
+        return SONNET_MODEL_NAME
+    return None
 
 
 def route(profile: Profile, *, snap: Optional[snap_mod.QuotaSnapshot] = None) -> RouteDecision:
@@ -98,32 +128,37 @@ def route(profile: Profile, *, snap: Optional[snap_mod.QuotaSnapshot] = None) ->
 
     if can_use_max:
         fallbacks = [ProviderChoice.ANTHROPIC_API]
+        sonnet = _sonnet_hint(snap, profile)
+        sonnet_note = f" (hinting {sonnet})" if sonnet else ""
 
         # Burn mode: reset imminent, use what's left even for high-end work.
         if headroom.mode == BurnMode.BURN_IT:
             return RouteDecision(
                 choice=ProviderChoice.CLAUDE_MAX,
-                reasoning=f"BURN MODE — {headroom.explanation}",
+                reasoning=f"BURN MODE — {headroom.explanation}{sonnet_note}",
                 burn_mode=headroom.mode,
                 fallback_chain=fallbacks,
+                model_hint=sonnet,
             )
 
         # Aggressive: Max wide open, prefer it for non-trivial work.
         if headroom.mode == BurnMode.AGGRESSIVE:
             return RouteDecision(
                 choice=ProviderChoice.CLAUDE_MAX,
-                reasoning=f"AGGRESSIVE — {headroom.explanation}",
+                reasoning=f"AGGRESSIVE — {headroom.explanation}{sonnet_note}",
                 burn_mode=headroom.mode,
                 fallback_chain=fallbacks,
+                model_hint=sonnet,
             )
 
         # Normal mode: route to Max for high-end requests, otherwise let it fall through.
         if headroom.mode == BurnMode.NORMAL and profile.prefers_high_end:
             return RouteDecision(
                 choice=ProviderChoice.CLAUDE_MAX,
-                reasoning=f"NORMAL + prefers_high_end — {headroom.explanation}",
+                reasoning=f"NORMAL + prefers_high_end — {headroom.explanation}{sonnet_note}",
                 burn_mode=headroom.mode,
                 fallback_chain=fallbacks,
+                model_hint=sonnet,
             )
 
         # Conservative mode: reserve Max for interactive — only burn if forced
@@ -160,6 +195,7 @@ def route(profile: Profile, *, snap: Optional[snap_mod.QuotaSnapshot] = None) ->
             reasoning=f"API at cap ({snap.api_extra_pct:.0f}%); using Max despite conservative",
             burn_mode=headroom.mode,
             fallback_chain=[ProviderChoice.UNAVAILABLE],
+            model_hint=_sonnet_hint(snap, profile),
         )
 
     return RouteDecision(
