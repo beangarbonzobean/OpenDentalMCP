@@ -113,7 +113,21 @@ def api_snapshot():
         "claude": storage.read_claude_latest(),
         "gpu": _live_gpu(),
         "pipeline": _live_pipeline(),
+        "routing": _routing_summary(),
     })
+
+
+@utilization_bp.get("/api/routing-history")
+def api_routing_history():
+    """Recent routing decisions for the per-call audit panel."""
+    try:
+        from inference_router import log_store as router_log
+        return jsonify({
+            "recent": router_log.recent(limit=int(request.args.get("limit", 50))),
+            "histogram": router_log.histogram_24h(),
+        })
+    except ImportError:
+        return jsonify({"recent": [], "histogram": {}, "note": "router not installed"})
 
 
 @utilization_bp.post("/api/claude-snapshot")
@@ -164,3 +178,12 @@ def _live_gpu() -> dict:
 
 def _live_pipeline() -> dict:
     return pipeline_poller.probe()
+
+
+def _routing_summary() -> dict:
+    """Compact 24h routing summary for the snapshot endpoint."""
+    try:
+        from inference_router import log_store as router_log
+        return router_log.histogram_24h()
+    except ImportError:
+        return {}

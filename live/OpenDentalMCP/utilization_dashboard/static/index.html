@@ -211,6 +211,16 @@ header .updated {
     <div class="small dim" id="gpu-source"></div>
   </div>
 
+  <div class="card" id="card-routing">
+    <h2>Inference Router (last 24h)</h2>
+    <div class="row"><span class="label">Total routed</span><span class="value" id="routing-total">—</span></div>
+    <div class="row"><span class="label">Cost (24h)</span><span class="value" id="routing-cost">—</span></div>
+    <div class="note">Where work actually went</div>
+    <div class="kv" id="routing-actuals"></div>
+    <div class="note">Burn-mode at decision time</div>
+    <div class="kv" id="routing-burn-modes"></div>
+  </div>
+
   <div class="card" id="card-pipeline">
     <h2>OCR Pipeline (last 24h)</h2>
     <div class="big" id="pipeline-rows-24h">—</div>
@@ -331,6 +341,31 @@ async function refresh() {
       'alert-idle',
       ((g.sm_pct == null || g.sm_pct < 10) && !(g.loaded_models || []).length)
     );
+
+    // Routing
+    const rt = data.routing || {};
+    const totalRouted = Object.values(rt.actual_provider_24h || {}).reduce((a, b) => a + b, 0);
+    setText('routing-total', totalRouted ? totalRouted.toLocaleString() : '0');
+    setText('routing-cost', fmtUsd(rt.cost_24h_usd ?? 0));
+    const actTbl = document.getElementById('routing-actuals');
+    actTbl.innerHTML = '';
+    const actEntries = Object.entries(rt.actual_provider_24h || {}).sort((a, b) => b[1] - a[1]);
+    if (actEntries.length === 0) {
+      const k = document.createElement('div'); k.className = 'dim'; k.textContent = '(no calls routed yet)';
+      actTbl.appendChild(k);
+    }
+    actEntries.forEach(([provider, n]) => {
+      const k = document.createElement('div'); k.textContent = provider;
+      const v = document.createElement('div'); v.className = 'v'; v.textContent = n;
+      actTbl.appendChild(k); actTbl.appendChild(v);
+    });
+    const bmTbl = document.getElementById('routing-burn-modes');
+    bmTbl.innerHTML = '';
+    Object.entries(rt.burn_modes_24h || {}).sort((a, b) => b[1] - a[1]).forEach(([mode, n]) => {
+      const k = document.createElement('div'); k.textContent = mode;
+      const v = document.createElement('div'); v.className = 'v'; v.textContent = n;
+      bmTbl.appendChild(k); bmTbl.appendChild(v);
+    });
 
     // Pipeline
     const p = data.pipeline || {};
