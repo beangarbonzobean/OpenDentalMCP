@@ -31,6 +31,23 @@ CREATE TABLE IF NOT EXISTS project_next_steps (
 );
 CREATE INDEX IF NOT EXISTS idx_pns_project_ts
     ON project_next_steps (project_id, ts DESC);
+
+CREATE TABLE IF NOT EXISTS project_investigation (
+    project_id      TEXT NOT NULL,
+    bullet_hash     TEXT NOT NULL,         -- sha1 of bullet text, deduplication key
+    ts              TEXT NOT NULL,
+    bullet_text     TEXT NOT NULL,
+    content         TEXT NOT NULL,         -- markdown report from agent
+    model_used      TEXT,
+    provider_used   TEXT,
+    latency_ms      INTEGER,
+    cost_usd        REAL,
+    tools_used      TEXT,                  -- JSON list of tool names
+    cwd             TEXT,
+    PRIMARY KEY (project_id, bullet_hash, ts)
+);
+CREATE INDEX IF NOT EXISTS idx_pi_project_bullet
+    ON project_investigation (project_id, bullet_hash, ts DESC);
 """
 
 
@@ -96,6 +113,82 @@ def latest(project_id: str) -> Optional[dict]:
         except json.JSONDecodeError:
             pass
     return d
+
+
+def write_investigation(
+    project_id: str,
+    bullet_hash: str,
+    bullet_text: str,
+    *,
+    content: str,
+    model_used: str = "",
+    provider_used: str = "",
+    latency_ms: int = 0,
+    cost_usd: float = 0.0,
+    tools_used: Optional[list[str]] = None,
+    cwd: str = "",
+) -> str:
+    _init()
+    ts = _now_iso()
+    with _conn() as db:
+        db.execute(
+            "INSERT OR REPLACE INTO project_investigation "
+            "(project_id, bullet_hash, ts, bullet_text, content, "
+            " model_used, provider_used, latency_ms, cost_usd, tools_used, cwd) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (project_id, bullet_hash, ts, bullet_text, content,
+             model_used, provider_used, latency_ms, cost_usd,
+             json.dumps(tools_used) if tools_used else None, cwd),
+        )
+    return ts
+
+
+def latest_investigation(project_id: str, bullet_hash: str) -> Optional[dict]:
+    _init()
+    with _conn() as db:
+        row = db.execute(
+            "SELECT * FROM project_investigation "
+            "WHERE project_id=? AND bullet_hash=? "
+            "ORDER BY ts DESC LIMIT 1",
+            (project_id, bullet_hash),
+        ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    if d.get("tools_used"):
+        try:
+            d["tools_used"] = json.loads(d["tools_used"])
+        except json.JSONDecodeError:
+            pass
+    return d
+
+
+def investigations_for_project(project_id: str) -> dict[str, dict]:
+    """Return {bullet_hash: latest_investigation_row} for a project."""
+    _init()
+    with _conn() as db:
+        rows = db.execute(
+            "SELECT pi.* FROM project_investigation pi "
+            "INNER JOIN ("
+            "  SELECT project_id, bullet_hash, MAX(ts) AS max_ts "
+            "  FROM project_investigation WHERE project_id=? "
+            "  GROUP BY project_id, bullet_hash"
+            ") latest "
+            "  ON pi.project_id=latest.project_id "
+            " AND pi.bullet_hash=latest.bullet_hash "
+            " AND pi.ts=latest.max_ts",
+            (project_id,),
+        ).fetchall()
+    out: dict[str, dict] = {}
+    for r in rows:
+        d = dict(r)
+        if d.get("tools_used"):
+            try:
+                d["tools_used"] = json.loads(d["tools_used"])
+            except json.JSONDecodeError:
+                pass
+        out[d["bullet_hash"]] = d
+    return out
 
 
 def latest_all() -> dict[str, dict]:

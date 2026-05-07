@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project Detail</title>
+<style>
+:root {
+  --bg: #0e1116;
+  --panel: #161b22;
+  --panel-border: #30363d;
+  --text: #e6edf3;
+  --text-dim: #8b949e;
+  --accent: #2f81f7;
+  --good: #2ea043;
+  --warn: #d29922;
+  --bad: #f85149;
+  --neutral: #6e7681;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+
+header {
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--panel-border);
+  display: flex; align-items: baseline; gap: 16px;
+}
+header h1 { margin: 0; font-size: 16px; font-weight: 600; }
+header nav a { color: var(--text-dim); text-decoration: none; font-size: 13px; margin-right: 14px; }
+header nav a:hover { color: var(--text); }
+header nav a.active { color: var(--text); border-bottom: 2px solid var(--accent); padding-bottom: 2px; }
+header .breadcrumb { color: var(--text-dim); font-size: 12px; }
+header .breadcrumb a { color: var(--accent); text-decoration: none; }
+header .updated { color: var(--text-dim); font-size: 12px; margin-left: auto; }
+
+.container { padding: 18px 20px; max-width: 1200px; }
+
+.title-row { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+.title-row h2 { margin: 0; font-size: 22px; font-weight: 600; }
+.tag { font-size: 10px; padding: 1px 6px; border-radius: 3px;
+  background: rgba(255,255,255,0.06); color: var(--text-dim);
+  letter-spacing: 0.04em; }
+.tag.phase { background: rgba(47, 129, 247, 0.12); color: var(--accent); }
+.status-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
+.status-green { background: var(--good); }
+.status-yellow { background: var(--warn); }
+.status-red { background: var(--bad); }
+.status-unknown { background: var(--neutral); }
+.status-reason { color: var(--text-dim); font-size: 13px; margin-bottom: 14px; }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 16px 18px;
+  margin-bottom: 14px;
+}
+.panel h3 {
+  margin: 0 0 10px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  display: flex; justify-content: space-between; align-items: baseline;
+}
+
+.desc { font-size: 14px; line-height: 1.55; color: var(--text); white-space: pre-wrap; }
+
+.kv {
+  display: grid; grid-template-columns: 160px 1fr; gap: 6px 12px;
+  font-size: 13px; color: var(--text-dim);
+}
+.kv .v { color: var(--text); font-variant-numeric: tabular-nums; word-break: break-word; }
+
+.bullet-block { border-top: 1px solid var(--panel-border); padding: 12px 0 4px; }
+.bullet-block:first-child { border-top: none; padding-top: 0; }
+.bullet-row {
+  display: flex; gap: 12px; align-items: flex-start;
+  font-size: 13px; line-height: 1.5;
+}
+.bullet-text { flex: 1; }
+.bullet-text strong { font-weight: 600; }
+button.investigate {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+button.investigate:hover { color: var(--text); border-color: var(--accent); }
+button.investigate:disabled { opacity: 0.5; cursor: wait; }
+button.investigate.has-result { color: var(--good); border-color: var(--good); }
+
+.investigation-output {
+  margin-top: 10px;
+  margin-left: 18px;
+  padding: 12px 14px;
+  background: var(--bg);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 6px 6px 0;
+  font-size: 13px; line-height: 1.5;
+  display: none;
+}
+.investigation-output.expanded { display: block; }
+.investigation-output h3, .investigation-output h4 {
+  margin: 0 0 6px; font-size: 12px; font-weight: 600;
+  text-transform: none; letter-spacing: 0; color: var(--text);
+}
+.investigation-output ul { padding-left: 20px; margin: 4px 0 10px; }
+.investigation-output li { margin: 3px 0; }
+.investigation-output code {
+  background: rgba(255,255,255,0.06);
+  padding: 1px 5px; border-radius: 3px;
+  font-size: 12px;
+}
+.investigation-meta { font-size: 10px; color: var(--text-dim); margin-top: 8px; }
+
+.refresh-btn {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.refresh-btn:hover { color: var(--text); border-color: var(--accent); }
+.refresh-btn:disabled { opacity: 0.5; cursor: wait; }
+
+pre.log-tail {
+  background: var(--bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 10px;
+  font: 12px/1.4 ui-monospace, monospace;
+  color: var(--text-dim);
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.bullet-error { color: var(--bad); }
+.dim { color: var(--text-dim); }
+em { color: var(--text-dim); font-style: normal; }
+</style>
+</head>
+
+<body>
+<header>
+  <h1 id="title">Project Detail</h1>
+  <nav>
+    <a href="/utilization/">Utilization</a>
+    <a href="/utilization/projects/">Projects</a>
+  </nav>
+  <span class="breadcrumb" id="breadcrumb"></span>
+  <span class="updated" id="updated">—</span>
+</header>
+
+<div class="container" id="container">
+  <em>Loading…</em>
+</div>
+
+<script>
+function escape(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function fmtAge(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d)) return '—';
+  const ago = (Date.now() - d.getTime()) / 1000;
+  if (ago < 60) return Math.round(ago) + 's ago';
+  if (ago < 3600) return Math.round(ago / 60) + 'm ago';
+  if (ago < 86400) return Math.round(ago / 3600) + 'h ago';
+  return Math.round(ago / 86400) + 'd ago';
+}
+
+function statusClass(level) { return 'status-' + (level || 'unknown'); }
+
+// Parse the next-steps markdown into individual bullets so each can have
+// its own Investigate button.
+function parseBullets(md) {
+  if (!md) return [];
+  const out = [];
+  let buf = '';
+  for (const raw of md.split('\n')) {
+    const ln = raw.trimEnd();
+    const isBulletStart = /^\s*[-*]\s+/.test(ln);
+    if (isBulletStart) {
+      if (buf.trim()) out.push(buf.trim());
+      buf = ln.replace(/^\s*[-*]\s+/, '');
+    } else if (ln.trim() === '') {
+      if (buf.trim()) { out.push(buf.trim()); buf = ''; }
+    } else {
+      buf += '\n' + ln;
+    }
+  }
+  if (buf.trim()) out.push(buf.trim());
+  return out;
+}
+
+// Lightweight markdown for bullet text (bold, code).
+function renderInline(s) {
+  let out = escape(s);
+  out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  out = out.replace(/`([^`]+)`/g, '<code>$1</code>');
+  return out.replace(/\n/g, '<br>');
+}
+
+// Markdown renderer for investigation output (sections + bullets + inline code).
+function renderInvestigation(md) {
+  if (!md) return '<em>Empty response.</em>';
+  const lines = md.split('\n');
+  const out = [];
+  let inList = false;
+  const flushList = () => { if (inList) { out.push('</ul>'); inList = false; } };
+  for (const raw of lines) {
+    const ln = raw.trimEnd();
+    let m;
+    if ((m = ln.match(/^#{1,4}\s+(.+)$/))) {
+      flushList();
+      const level = (ln.match(/^#+/) || ['#'])[0].length;
+      const tag = level <= 2 ? 'h3' : 'h4';
+      out.push(`<${tag}>${renderInline(m[1])}</${tag}>`);
+    } else if (/^\s*[-*]\s+/.test(ln)) {
+      if (!inList) { out.push('<ul>'); inList = true; }
+      out.push('<li>' + renderInline(ln.replace(/^\s*[-*]\s+/, '')) + '</li>');
+    } else if (ln.trim() === '') {
+      flushList();
+    } else {
+      flushList();
+      out.push('<div>' + renderInline(ln) + '</div>');
+    }
+  }
+  flushList();
+  return out.join('');
+}
+
+// SHA-1 of a string, hex, first 16 chars — must match the server's hash.
+async function bulletHash(text) {
+  const bytes = new TextEncoder().encode(text);
+  const hash = await crypto.subtle.digest('SHA-1', bytes);
+  const bin = Array.from(new Uint8Array(hash));
+  return bin.map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
+}
+
+const projectId = decodeURIComponent(
+  (location.pathname.match(/\/projects\/([^/]+)\/?$/) || [])[1] || ''
+);
+
+async function loadDetail() {
+  const c = document.getElementById('container');
+  try {
+    const r = await fetch(`/utilization/api/projects/${encodeURIComponent(projectId)}/detail`,
+                         { cache: 'no-store' });
+    if (!r.ok) throw new Error('detail ' + r.status);
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+
+    const status = d.status || {};
+    const health = status.health || {};
+    const ns = d.next_steps;
+    const investigations = d.investigations || {};
+
+    document.getElementById('title').textContent = status.name || 'Project';
+    document.getElementById('breadcrumb').innerHTML =
+      `<a href="/utilization/projects/">All projects</a> · ${escape(status.domain || '')}`;
+    document.getElementById('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
+
+    const bullets = parseBullets(ns && ns.content);
+
+    const bulletsHtml = bullets.length
+      ? (await Promise.all(bullets.map(async (b) => {
+          const h = await bulletHash(b);
+          const inv = investigations[h];
+          const hasResult = !!inv;
+          return `
+            <div class="bullet-block">
+              <div class="bullet-row">
+                <div class="bullet-text">${renderInline(b)}</div>
+                <button class="investigate ${hasResult ? 'has-result' : ''}"
+                        data-bullet-text="${encodeURIComponent(b)}"
+                        data-bullet-hash="${h}">
+                  ${hasResult ? '↻ Re-investigate' : 'Investigate'}
+                </button>
+              </div>
+              <div class="investigation-output ${hasResult ? 'expanded' : ''}" id="inv-${h}">
+                ${inv ? renderInvestigation(inv.content) : ''}
+                ${inv ? `<div class="investigation-meta">via ${escape(inv.provider_used || '')} (${escape(inv.model_used || '')}) · ${fmtAge(inv.ts)} · tools: ${(inv.tools_used || []).join(', ')}</div>` : ''}
+              </div>
+            </div>`;
+        }))).join('')
+      : '<em>No next-steps generated yet. Refresh on the projects page.</em>';
+
+    c.innerHTML = `
+      <div class="title-row">
+        <span class="status-dot ${statusClass(status.overall)}"></span>
+        <h2>${escape(status.name)}</h2>
+        <span class="tag phase">${escape(status.phase || '')}</span>
+        <span class="tag">${escape(status.domain || '')}</span>
+      </div>
+      <div class="status-reason">${escape(status.overall_reason || '')}</div>
+
+      <div class="panel">
+        <h3>Description</h3>
+        <div class="desc">${escape(status.description || '')}</div>
+      </div>
+
+      <div class="panel">
+        <h3>Health signals</h3>
+        <div class="kv">
+          <div>service</div>             <div class="v">${escape(health.service || '—')} ${escape(health.service_status || '')}</div>
+          <div>last commit</div>         <div class="v">${health.last_commit_age_days != null ? health.last_commit_age_days.toFixed(1) + 'd' : '—'}${health.last_commit_subject ? ' — ' + escape(health.last_commit_subject) : ''}</div>
+          <div>log freshness</div>       <div class="v">${health.log_age_hours != null ? health.log_age_hours.toFixed(1) + 'h' : '—'} (stale&nbsp;after ${health.log_stale_after_hours}h)</div>
+          <div>log path</div>            <div class="v">${escape(health.log_path || '—')}</div>
+          <div>repo path</div>           <div class="v">${escape(status.repo_path)}</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>
+          <span>Next steps · click any bullet's "Investigate" to dig deeper</span>
+          <button class="refresh-btn" id="refresh-ns">Regenerate</button>
+        </h3>
+        ${bulletsHtml}
+        <div class="investigation-meta" id="ns-meta">
+          ${ns ? `generated ${fmtAge(ns.ts)} via ${escape(ns.provider_used || '')} (${escape(ns.model_used || '')})` : ''}
+        </div>
+      </div>
+    `;
+
+    // Wire up the bullet "Investigate" buttons
+    c.querySelectorAll('button.investigate').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const text = decodeURIComponent(btn.dataset.bulletText);
+        const h = btn.dataset.bulletHash;
+        const out = document.getElementById('inv-' + h);
+        const original = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = 'Running…';
+        out.classList.add('expanded');
+        out.innerHTML = '<em>Agent investigating (read-only: Read / Grep / Glob). 30–90s typical.</em>';
+        try {
+          const res = await fetch(
+            `/utilization/api/projects/${encodeURIComponent(projectId)}/investigate`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ bullet_text: text }),
+            }
+          );
+          const d = await res.json();
+          if (!res.ok || d.error) {
+            out.innerHTML = `<div class="bullet-error">${escape(d.error || 'failed')}</div>`;
+          } else {
+            out.innerHTML =
+              renderInvestigation(d.content) +
+              `<div class="investigation-meta">via ${escape(d.provider || '')} (${escape(d.model || '')}) · just now · cwd: <code>${escape(d.cwd || '')}</code></div>`;
+            btn.classList.add('has-result');
+            btn.textContent = '↻ Re-investigate';
+          }
+        } catch (e) {
+          out.innerHTML = `<div class="bullet-error">${escape(e.message || e)}</div>`;
+        } finally {
+          btn.disabled = false;
+          if (!btn.classList.contains('has-result')) btn.textContent = original;
+        }
+      });
+    });
+
+    // Regenerate next-steps button
+    const regen = document.getElementById('refresh-ns');
+    if (regen) {
+      regen.addEventListener('click', async () => {
+        regen.disabled = true; const orig = regen.textContent;
+        regen.textContent = 'Generating…';
+        try {
+          const r = await fetch(
+            `/utilization/api/projects/${encodeURIComponent(projectId)}/refresh-next-steps`,
+            { method: 'POST' }
+          );
+          if (r.ok) await loadDetail();
+        } finally {
+          regen.disabled = false; regen.textContent = orig;
+        }
+      });
+    }
+  } catch (e) {
+    c.innerHTML = `<div class="bullet-error">Failed to load: ${escape(e.message || e)}</div>`;
+  }
+}
+
+loadDetail();
+</script>
+</body>
+</html>

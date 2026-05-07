@@ -110,6 +110,13 @@ def projects_index():
     return send_from_directory(STATIC_DIR, "projects.html")
 
 
+@utilization_bp.get("/projects/<project_id>/")
+def project_detail(project_id: str):
+    """Detail view for one project. The project_id is read client-side from
+    the URL; the page itself is static and fetches /api/projects/<id>/detail."""
+    return send_from_directory(STATIC_DIR, "project_detail.html")
+
+
 @utilization_bp.get("/<path:filename>")
 def static_assets(filename: str):
     return send_from_directory(STATIC_DIR, filename)
@@ -127,6 +134,128 @@ def api_projects_snapshot():
     for s in statuses:
         s["next_steps"] = cached.get(s["id"])
     return jsonify({"projects": statuses})
+
+
+@utilization_bp.get("/api/projects/<project_id>/detail")
+def api_project_detail(project_id: str):
+    """Full per-project payload for the detail page."""
+    registry = projects_poller.load_registry()
+    project = next((p for p in registry if p.get("id") == project_id), None)
+    if not project:
+        return jsonify({"error": f"unknown project_id: {project_id}"}), 404
+    status = projects_poller.status_for(project)
+    next_steps = projects_storage.latest(project_id)
+    investigations = projects_storage.investigations_for_project(project_id)
+    return jsonify({
+        "status": _status_to_dict(status),
+        "next_steps": next_steps,
+        "investigations": investigations,
+        "project_yaml": {k: v for k, v in project.items() if k != "description"},
+    })
+
+
+@utilization_bp.post("/api/projects/<project_id>/investigate")
+def api_investigate(project_id: str):
+    """Run a read-only agent investigation on a single bullet.
+
+    Body: {"bullet_text": "..."}
+    Returns: the agent's markdown report + provenance.
+    """
+    import hashlib
+
+    body = request.get_json(silent=True) or {}
+    bullet_text = (body.get("bullet_text") or "").strip()
+    if not bullet_text:
+        return jsonify({"error": "missing 'bullet_text'"}), 400
+
+    registry = projects_poller.load_registry()
+    project = next((p for p in registry if p.get("id") == project_id), None)
+    if not project:
+        return jsonify({"error": f"unknown project_id: {project_id}"}), 404
+
+    bullet_hash = hashlib.sha1(bullet_text.encode("utf-8")).hexdigest()[:16]
+
+    # Build a focused investigation prompt. The agent gets the full project
+    # bundle as background plus the specific bullet to investigate.
+    bundle_prompt, _ = context_bundler.build(project)
+    investigation_prompt = (
+        "You are investigating ONE specific recommendation for the project "
+        "described below. Use the read-only tools (Read, Grep, Glob) to "
+        "gather concrete evidence from the project's files, then write a "
+        "short report.\n\n"
+        f"Bullet under investigation:\n  > {bullet_text}\n\n"
+        "Output format (markdown):\n"
+        "  ### Findings\n"
+        "  - 2 to 4 bullets of CONCRETE evidence you uncovered (cite file\n"
+        "    paths, line numbers, log snippets, commit SHAs)\n"
+        "  ### Recommendation\n"
+        "  - 1 to 3 bullets of specific changes to make. If no change is\n"
+        "    needed, say so explicitly.\n"
+        "  ### Confidence\n"
+        "  - HIGH | MEDIUM | LOW with one line explaining why.\n\n"
+        "Be concise. No preamble. Do not propose changes you can't justify\n"
+        "from what you actually read.\n\n"
+        "--- BACKGROUND CONTEXT ---\n"
+        + bundle_prompt
+    )
+
+    try:
+        from inference_router import Profile, dispatch
+    except ImportError:
+        return jsonify({"error": "inference_router not installed"}), 500
+
+    # Resolve cwd to the absolute project repo path so Read/Grep/Glob target
+    # the right tree.
+    repo_path_rel = project.get("repo_path", "")
+    project_cwd = str((projects_poller._GIT_ROOT / repo_path_rel).resolve())
+
+    try:
+        result = dispatch(
+            Profile(
+                fits_local=False,
+                prefers_high_end=True,
+                tag=f"investigate:{project_id}:{bullet_hash}",
+                max_output_tokens=1500,
+            ),
+            investigation_prompt,
+            max_tokens=1500,
+            timeout=240,
+            allowed_tools=["Read", "Grep", "Glob"],
+            cwd=project_cwd,
+        )
+    except Exception as e:
+        log.exception("investigate dispatch failed for %s: %s", project_id, e)
+        return jsonify({"error": f"dispatch failed: {type(e).__name__}: {e}"}), 502
+
+    ts = projects_storage.write_investigation(
+        project_id,
+        bullet_hash,
+        bullet_text,
+        content=result.text,
+        model_used=result.model,
+        provider_used=result.provider,
+        latency_ms=result.latency_ms,
+        cost_usd=result.cost_usd,
+        tools_used=["Read", "Grep", "Glob"],
+        cwd=project_cwd,
+    )
+    return jsonify({
+        "ok": True,
+        "ts": ts,
+        "project_id": project_id,
+        "bullet_hash": bullet_hash,
+        "content": result.text,
+        "provider": result.provider,
+        "model": result.model,
+        "latency_ms": result.latency_ms,
+        "cwd": project_cwd,
+    })
+
+
+def _status_to_dict(status) -> dict:
+    """Convert ProjectStatus dataclass to a plain dict (handles nested HealthCheck)."""
+    from dataclasses import asdict
+    return asdict(status)
 
 
 @utilization_bp.post("/api/projects/<project_id>/refresh-next-steps")

@@ -35,6 +35,8 @@ class ClaudeSubprocessProvider(Provider):
         model_hint: Optional[str] = None,
         max_tokens: int = 2048,
         timeout: int = 60,
+        allowed_tools: Optional[list[str]] = None,  # legacy provider, ignored
+        cwd: Optional[str] = None,                   # legacy provider, ignored
     ) -> InferenceResult:
         if images:
             raise ProviderError("subprocess provider doesn't support images in v1")

@@ -68,6 +68,8 @@ class ClaudeAgentSDKProvider(Provider):
         model_hint: Optional[str] = None,
         max_tokens: int = 2048,
         timeout: int = 60,
+        allowed_tools: Optional[list[str]] = None,
+        cwd: Optional[str] = None,
     ) -> InferenceResult:
         if images:
             raise ProviderError("SDK provider doesn't support images in v1")
@@ -91,15 +93,21 @@ class ClaudeAgentSDKProvider(Provider):
                 "$CLAUDE_AGENT_CLI_PATH"
             )
 
+        # Decide max_turns based on whether tools are allowed. With tools,
+        # the agent may need multiple turns to read/grep/synthesize.
+        effective_tools = list(allowed_tools or [])
+        max_turns_value = 8 if effective_tools else 1
+
         async def _run() -> tuple[str, dict]:
-            options = ClaudeAgentOptions(
-                model=model,
-                cli_path=cli_path,
-                # No tools — we just want a single answer.
-                allowed_tools=[],
-                # Single-turn: agent should reply once and stop.
-                max_turns=1,
-            )
+            kwargs = {
+                "model": model,
+                "cli_path": cli_path,
+                "allowed_tools": effective_tools,
+                "max_turns": max_turns_value,
+            }
+            if cwd:
+                kwargs["cwd"] = cwd
+            options = ClaudeAgentOptions(**kwargs)
             text_parts: list[str] = []
             metadata: dict = {}
             async for message in query(prompt=prompt, options=options):

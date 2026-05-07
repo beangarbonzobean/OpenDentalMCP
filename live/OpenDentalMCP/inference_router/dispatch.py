@@ -44,6 +44,8 @@ def dispatch(
     images: Optional[list[bytes]] = None,
     max_tokens: int = 2048,
     timeout: int = 120,
+    allowed_tools: Optional[list[str]] = None,
+    cwd: Optional[str] = None,
 ) -> InferenceResult:
     """Route to a provider, call it, fall through on failure. Logs both
     decision and outcome to utilization.db.
@@ -76,6 +78,8 @@ def dispatch(
                 model_hint=decision.model_hint if idx == 0 else None,
                 max_tokens=max_tokens,
                 timeout=timeout,
+                allowed_tools=allowed_tools,
+                cwd=cwd,
             )
         except ProviderError as e:
             last_err = e

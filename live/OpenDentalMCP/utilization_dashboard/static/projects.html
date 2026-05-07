@@ -52,6 +52,16 @@ header .updated { color: var(--text-dim); font-size: 12px; margin-left: auto; }
   padding: 16px;
   display: flex; flex-direction: column;
 }
+.card.clickable { cursor: pointer; transition: border-color 0.15s; }
+.card.clickable:hover { border-color: var(--accent); }
+.card .open-link {
+  align-self: flex-start;
+  font-size: 11px;
+  color: var(--accent);
+  text-decoration: none;
+  margin-top: 8px;
+}
+.card .open-link:hover { text-decoration: underline; }
 .card h2 { margin: 0 0 4px; font-size: 14px; font-weight: 600;
   display: flex; align-items: center; gap: 8px; }
 .card .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -178,8 +188,13 @@ function bundleSummaryLine(b) {
 
 function buildCard(p) {
   const card = document.createElement('div');
-  card.className = 'card';
+  card.className = 'card clickable';
   card.dataset.projectId = p.id;
+  card.addEventListener('click', (e) => {
+    // Don't navigate if the click was on a button or link inside the card.
+    if (e.target.closest('button, a')) return;
+    window.location.href = '/utilization/projects/' + encodeURIComponent(p.id) + '/';
+  });
 
   const reason = p.overall_reason ? p.overall_reason : '';
 
@@ -217,6 +232,7 @@ function buildCard(p) {
           ? `generated ${fmtAge(p.next_steps.ts)} via ${escape(p.next_steps.provider_used || '')} (${escape(p.next_steps.model_used || '')}); ${bundleSummaryLine(p.next_steps.bundle_summary)}`
           : ''}
       </div>
+      <a class="open-link" href="/utilization/projects/${encodeURIComponent(p.id)}/">Open detail view →</a>
     </div>
   `;
 
