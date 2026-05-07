@@ -463,23 +463,34 @@ if (refreshBtn) {
 // is clicked from. The bookmarklet itself runs in the OTHER page's
 // context (claude.ai), so it can't compute the dashboard origin at
 // click time — we hardcode it now.
+//
+// Strategy: hit the same JSON API the page itself uses (more robust
+// than scraping rendered text). We auto-discover the org with
+// claude_max capability so this works for any user.
 (function buildBookmarklet() {
   const link = document.getElementById('bookmarklet');
   if (!link) return;
-  const target = window.location.origin + '/utilization/api/claude-snapshot';
+  const target = window.location.origin + '/utilization/api/claude-snapshot-json';
   const code =
-    "(function(){" +
-      "fetch(" + JSON.stringify(target) + ",{" +
-        "method:'POST'," +
-        "headers:{'Content-Type':'text/plain'}," +
-        "body:document.body.innerText" +
-      "}).then(r=>r.json()).then(d=>{" +
+    "(async function(){" +
+      "try{" +
+        "var orgs=await fetch('/api/organizations',{credentials:'include'}).then(r=>r.json());" +
+        "var org=orgs.find(function(o){return (o.capabilities||[]).indexOf('claude_max')!==-1});" +
+        "if(!org){alert('No claude_max org found in /api/organizations');return}" +
+        "var u=await fetch('/api/organizations/'+org.uuid+'/usage',{credentials:'include'}).then(r=>r.json());" +
+        "var p=null;" +
+        "try{p=await fetch('/api/organizations/'+org.uuid+'/prepaid/credits',{credentials:'include'}).then(r=>r.json())}catch(e){}" +
+        "var res=await fetch(" + JSON.stringify(target) + ",{" +
+          "method:'POST'," +
+          "headers:{'Content-Type':'application/json'}," +
+          "body:JSON.stringify({usage:u,prepaid_credits:p})" +
+        "}).then(r=>r.json());" +
         "var n=document.createElement('div');" +
         "n.style.cssText='position:fixed;top:20px;right:20px;background:#161b22;color:#e6edf3;border:1px solid #30363d;padding:10px 16px;border-radius:6px;font:14px sans-serif;z-index:99999';" +
-        "n.textContent='Dashboard updated - '+(d.fields_parsed||[]).length+' fields';" +
+        "n.textContent='Dashboard updated - '+(res.fields_parsed||[]).length+' fields';" +
         "document.body.appendChild(n);" +
         "setTimeout(function(){n.remove()},2500)" +
-      "}).catch(function(e){alert('Refresh failed: '+e.message)});" +
+      "}catch(e){alert('Refresh failed: '+(e&&e.message||e))}" +
     "})()";
   link.href = 'javascript:' + encodeURI(code);
 })();

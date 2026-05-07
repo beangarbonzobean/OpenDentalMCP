@@ -130,6 +130,38 @@ def api_routing_history():
         return jsonify({"recent": [], "histogram": {}, "note": "router not installed"})
 
 
+@utilization_bp.post("/api/claude-snapshot-json")
+def api_claude_snapshot_json():
+    """Accept the structured JSON returned by claude.ai's own usage API
+    (GET /api/organizations/<uuid>/usage), translate to our schema, store.
+
+    Body shape:
+      { "usage": {...}, "prepaid_credits": {...} | null }
+
+    The "usage" payload is what /api/organizations/<uuid>/usage returns.
+    "prepaid_credits" is optional but lets us fill the balance field.
+    """
+    body = request.get_json(silent=True) or {}
+    usage = body.get("usage")
+    if not isinstance(usage, dict):
+        return jsonify({"error": "missing or non-object 'usage' field"}), 400
+    parsed = scraper.parse_claude_usage_json(
+        usage,
+        prepaid_credits=body.get("prepaid_credits"),
+    )
+    if "session_pct" not in parsed and "weekly_all_pct" not in parsed:
+        return jsonify({
+            "error": "no recognizable fields in usage payload",
+            "keys_seen": sorted(usage.keys()),
+        }), 422
+    ts = storage.write_claude(parsed)
+    return jsonify({
+        "ok": True,
+        "ts": ts,
+        "fields_parsed": sorted(k for k in parsed.keys() if k != "raw_text"),
+    })
+
+
 @utilization_bp.post("/api/claude-snapshot")
 def api_claude_snapshot():
     """Accept raw page text scraped from claude.ai/settings/usage and store

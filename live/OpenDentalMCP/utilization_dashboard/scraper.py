@@ -91,6 +91,134 @@ _HOUR_RE = re.compile(r"(\d+)\s*hr")
 _MIN_RE = re.compile(r"(\d+)\s*min")
 
 
+# ---------------------------------------------------------------------------
+# JSON path — the "API" the page itself calls
+# ---------------------------------------------------------------------------
+#
+# The /settings/usage page hits GET /api/organizations/<uuid>/usage which
+# returns structured JSON. Way more robust than scraping rendered text:
+#  - Reset times are absolute ISO timestamps (no relative-duration parsing)
+#  - Sonnet bucket and Claude Design ("omelette") are explicit fields
+#  - New plan tiers appear as new keys without the parser breaking
+#
+# Codename map (Anthropic-internal -> our schema):
+#   five_hour                  -> session
+#   seven_day                  -> weekly all-models
+#   seven_day_sonnet           -> weekly sonnet-only
+#   seven_day_omelette         -> weekly Claude Design
+#   extra_usage                -> $X / $100 monthly cap
+
+def parse_claude_usage_json(usage: dict, prepaid_credits: dict | None = None) -> dict:
+    """Translate the API JSON into our existing Claude snapshot schema.
+
+    Mirrors the field names produced by parse_claude_usage() so the dashboard
+    UI doesn't need to change. Pass `prepaid_credits` if you fetched
+    /api/organizations/<id>/prepaid/credits separately (the balance shown
+    on the page lives there, not in /usage).
+    """
+    out: dict = {"raw_text": _summarize_for_debug(usage, prepaid_credits)}
+
+    # We don't have the plan name here, but the page header shows "Max (20x)".
+    # Best-effort: leave the existing plan field if a previous scrape set it;
+    # caller (writer) is INSERT OR REPLACE on (ts) so missing field is fine.
+
+    five_hour = usage.get("five_hour") or {}
+    if "utilization" in five_hour:
+        out["session_pct"] = float(five_hour["utilization"])
+    if five_hour.get("resets_at"):
+        out["session_resets_at_iso"] = _normalize_iso(five_hour["resets_at"])
+        out["session_resets_in_text"] = _format_relative(five_hour["resets_at"])
+
+    seven_day = usage.get("seven_day") or {}
+    if "utilization" in seven_day:
+        out["weekly_all_pct"] = float(seven_day["utilization"])
+    if seven_day.get("resets_at"):
+        out["weekly_resets_at_text"] = _format_weekly_when(seven_day["resets_at"])
+
+    sonnet = usage.get("seven_day_sonnet") or {}
+    if "utilization" in sonnet:
+        out["weekly_sonnet_pct"] = float(sonnet["utilization"])
+
+    omelette = usage.get("seven_day_omelette") or {}
+    if "utilization" in omelette:
+        out["weekly_design_pct"] = float(omelette["utilization"])
+
+    extra = usage.get("extra_usage") or {}
+    if extra:
+        # used_credits and monthly_limit are in cents per the API.
+        if "used_credits" in extra:
+            out["api_extra_spent_usd"] = float(extra["used_credits"]) / 100.0
+        if "monthly_limit" in extra:
+            out["api_extra_cap_usd"] = float(extra["monthly_limit"]) / 100.0
+        if "utilization" in extra:
+            out["api_extra_pct"] = float(extra["utilization"])
+
+    # Balance lives in a separate endpoint.
+    if prepaid_credits:
+        balance_cents = prepaid_credits.get("balance_credits")
+        if balance_cents is None:
+            # Some response shapes use a different field name; try a few.
+            balance_cents = (prepaid_credits.get("balance")
+                             or prepaid_credits.get("available_credits"))
+        if balance_cents is not None:
+            try:
+                out["api_extra_balance_usd"] = float(balance_cents) / 100.0
+            except (TypeError, ValueError):
+                pass
+
+    return out
+
+
+def _normalize_iso(ts: str) -> str:
+    """Strip sub-second precision and ensure trailing Z form, return ISO string."""
+    # Anthropic returns "2026-05-07T23:00:00.112462+00:00" — keep as-is, our
+    # downstream parsing handles the +00:00 / Z forms equivalently.
+    return ts
+
+
+def _format_relative(resets_at_iso: str) -> str:
+    """Convert absolute reset time -> 'X hr Y min' relative to now."""
+    try:
+        # Python <3.11 doesn't accept "Z" suffix; normalize to +00:00
+        cleaned = resets_at_iso.replace("Z", "+00:00")
+        target = datetime.fromisoformat(cleaned)
+    except (ValueError, TypeError):
+        return ""
+    now = datetime.now(timezone.utc)
+    delta = (target - now).total_seconds()
+    if delta <= 0:
+        return "0 min"
+    hours, rem = divmod(int(delta), 3600)
+    minutes = rem // 60
+    if hours and minutes:
+        return f"{hours} hr {minutes} min"
+    if hours:
+        return f"{hours} hr"
+    return f"{minutes} min"
+
+
+def _format_weekly_when(resets_at_iso: str) -> str:
+    """Convert absolute reset time -> 'Tue 3:00 PM' style display string.
+    Local time. Falls back to raw ISO on parse failure."""
+    try:
+        cleaned = resets_at_iso.replace("Z", "+00:00")
+        target = datetime.fromisoformat(cleaned).astimezone()
+    except (ValueError, TypeError):
+        return resets_at_iso
+    # Cross-platform: format the parts separately to avoid Linux %-I /
+    # Windows %#I divergence.
+    day = target.strftime("%a")
+    hour = target.strftime("%I").lstrip("0") or "12"   # 12-hour, drop pad
+    rest = target.strftime(":%M %p")
+    return f"{day} {hour}{rest}"
+
+
+def _summarize_for_debug(usage: dict, prepaid: dict | None) -> str:
+    """Cheap one-line summary stored in raw_text for debugging."""
+    import json as _json
+    return _json.dumps({"usage": usage, "prepaid_credits": prepaid})[:4000]
+
+
 def _resolve_relative_reset(duration_text: str) -> Optional[str]:
     """Convert '1 hr 49 min' to an ISO UTC timestamp of now+offset.
 
