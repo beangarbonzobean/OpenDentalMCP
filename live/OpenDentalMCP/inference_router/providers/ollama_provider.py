@@ -30,6 +30,7 @@ class OllamaProvider(Provider):
         timeout: int = 60,
         allowed_tools: Optional[list[str]] = None,  # not supported, ignored
         cwd: Optional[str] = None,                   # not supported, ignored
+        write_scope: Optional[str] = None,           # not supported, ignored
     ) -> InferenceResult:
         model = model_hint or OLLAMA_DEFAULT_MODEL
         body: dict = {

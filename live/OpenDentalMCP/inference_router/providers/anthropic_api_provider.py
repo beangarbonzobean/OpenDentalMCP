@@ -53,6 +53,7 @@ class AnthropicAPIProvider(Provider):
         timeout: int = 60,
         allowed_tools: Optional[list[str]] = None,  # API-side tool use not exposed in v1
         cwd: Optional[str] = None,                   # not applicable
+        write_scope: Optional[str] = None,           # not applicable
     ) -> InferenceResult:
         client = self._get_client()
         model = model_hint or DEFAULT_MODEL

@@ -37,5 +37,6 @@ class Provider(ABC):
         timeout: int = 60,
         allowed_tools: Optional[list[str]] = None,
         cwd: Optional[str] = None,
+        write_scope: Optional[str] = None,
     ) -> InferenceResult:
         ...

@@ -48,6 +48,29 @@ CREATE TABLE IF NOT EXISTS project_investigation (
 );
 CREATE INDEX IF NOT EXISTS idx_pi_project_bullet
     ON project_investigation (project_id, bullet_hash, ts DESC);
+
+CREATE TABLE IF NOT EXISTS project_proposal (
+    project_id      TEXT NOT NULL,
+    bullet_hash     TEXT NOT NULL,
+    ts              TEXT NOT NULL,
+    bullet_text     TEXT NOT NULL,
+    mode            TEXT NOT NULL,         -- 'l2' (review) | 'l3' (auto-apply)
+    status          TEXT NOT NULL,         -- 'pending' | 'applied' | 'discarded' | 'failed'
+    summary         TEXT,                  -- agent's markdown summary of changes
+    diff            TEXT,                  -- unified diff vs. main
+    files_changed   TEXT,                  -- JSON list of paths
+    worktree_path   TEXT,                  -- absolute path; cleared on apply/discard
+    branch          TEXT,
+    model_used      TEXT,
+    provider_used   TEXT,
+    latency_ms      INTEGER,
+    cost_usd        REAL,
+    error           TEXT,
+    PRIMARY KEY (project_id, bullet_hash, ts)
+);
+CREATE INDEX IF NOT EXISTS idx_pp_project_bullet
+    ON project_proposal (project_id, bullet_hash, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_pp_status ON project_proposal (status);
 """
 
 
@@ -189,6 +212,128 @@ def investigations_for_project(project_id: str) -> dict[str, dict]:
                 pass
         out[d["bullet_hash"]] = d
     return out
+
+
+def write_proposal(
+    project_id: str,
+    bullet_hash: str,
+    bullet_text: str,
+    *,
+    mode: str,
+    status: str,
+    summary: str = "",
+    diff: str = "",
+    files_changed: Optional[list[str]] = None,
+    worktree_path: str = "",
+    branch: str = "",
+    model_used: str = "",
+    provider_used: str = "",
+    latency_ms: int = 0,
+    cost_usd: float = 0.0,
+    error: str = "",
+) -> str:
+    _init()
+    ts = _now_iso()
+    with _conn() as db:
+        db.execute(
+            "INSERT OR REPLACE INTO project_proposal "
+            "(project_id, bullet_hash, ts, bullet_text, mode, status, summary, "
+            " diff, files_changed, worktree_path, branch, model_used, "
+            " provider_used, latency_ms, cost_usd, error) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (project_id, bullet_hash, ts, bullet_text, mode, status, summary,
+             diff, json.dumps(files_changed or []), worktree_path, branch,
+             model_used, provider_used, latency_ms, cost_usd, error),
+        )
+    return ts
+
+
+def update_proposal_status(
+    project_id: str, bullet_hash: str, ts: str,
+    *, status: str, error: str = "", clear_worktree: bool = False,
+) -> None:
+    _init()
+    sets = ["status=?"]
+    args: list = [status]
+    if error:
+        sets.append("error=?")
+        args.append(error)
+    if clear_worktree:
+        sets.append("worktree_path=''")
+    args += [project_id, bullet_hash, ts]
+    with _conn() as db:
+        db.execute(
+            f"UPDATE project_proposal SET {', '.join(sets)} "
+            "WHERE project_id=? AND bullet_hash=? AND ts=?",
+            args,
+        )
+
+
+def latest_proposal(project_id: str, bullet_hash: str) -> Optional[dict]:
+    _init()
+    with _conn() as db:
+        row = db.execute(
+            "SELECT * FROM project_proposal "
+            "WHERE project_id=? AND bullet_hash=? "
+            "ORDER BY ts DESC LIMIT 1",
+            (project_id, bullet_hash),
+        ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    if d.get("files_changed"):
+        try:
+            d["files_changed"] = json.loads(d["files_changed"])
+        except json.JSONDecodeError:
+            pass
+    return d
+
+
+def proposals_for_project(project_id: str) -> dict[str, dict]:
+    """Return {bullet_hash: latest_proposal} for a project."""
+    _init()
+    with _conn() as db:
+        rows = db.execute(
+            "SELECT pp.* FROM project_proposal pp "
+            "INNER JOIN ("
+            "  SELECT project_id, bullet_hash, MAX(ts) AS max_ts "
+            "  FROM project_proposal WHERE project_id=? "
+            "  GROUP BY project_id, bullet_hash"
+            ") latest "
+            "  ON pp.project_id=latest.project_id "
+            " AND pp.bullet_hash=latest.bullet_hash "
+            " AND pp.ts=latest.max_ts",
+            (project_id,),
+        ).fetchall()
+    out: dict[str, dict] = {}
+    for r in rows:
+        d = dict(r)
+        if d.get("files_changed"):
+            try:
+                d["files_changed"] = json.loads(d["files_changed"])
+            except json.JSONDecodeError:
+                pass
+        out[d["bullet_hash"]] = d
+    return out
+
+
+def get_proposal_by_ts(project_id: str, bullet_hash: str, ts: str) -> Optional[dict]:
+    _init()
+    with _conn() as db:
+        row = db.execute(
+            "SELECT * FROM project_proposal "
+            "WHERE project_id=? AND bullet_hash=? AND ts=?",
+            (project_id, bullet_hash, ts),
+        ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    if d.get("files_changed"):
+        try:
+            d["files_changed"] = json.loads(d["files_changed"])
+        except json.JSONDecodeError:
+            pass
+    return d
 
 
 def latest_all() -> dict[str, dict]:

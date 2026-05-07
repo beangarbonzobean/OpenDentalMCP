@@ -33,6 +33,66 @@ DEFAULT_MODEL_HINT = os.environ.get("ROUTER_CLAUDE_MAX_MODEL", "")  # empty = SD
 DEFAULT_TIMEOUT = int(os.environ.get("ROUTER_CLAUDE_MAX_TIMEOUT", "120"))
 
 
+def _build_write_scope_callback(scope_dir: str):
+    """Returns an async can_use_tool callback that allows Write/Edit only
+    when the target path resolves inside scope_dir.
+
+    Read/Grep/Glob always pass through. Anything we don't recognize is
+    denied with a useful message.
+    """
+    from claude_agent_sdk import (  # type: ignore[import-not-found]
+        PermissionResultAllow,
+        PermissionResultDeny,
+    )
+    scope = Path(scope_dir).resolve()
+
+    def _resolve_input_path(tool_input: dict) -> Optional[Path]:
+        # Both Write and Edit use a "file_path" key per Claude Code conventions.
+        raw = tool_input.get("file_path") or tool_input.get("path")
+        if not raw:
+            return None
+        try:
+            return Path(raw).resolve()
+        except OSError:
+            return None
+
+    def _is_inside(target: Path, root: Path) -> bool:
+        try:
+            target.relative_to(root)
+            return True
+        except ValueError:
+            return False
+
+    async def can_use_tool(tool_name, tool_input, context):
+        # Read-only and search tools: always allow.
+        if tool_name in ("Read", "Grep", "Glob"):
+            return PermissionResultAllow()
+        # Write/Edit: must target a path inside scope.
+        if tool_name in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
+            target = _resolve_input_path(tool_input or {})
+            if target is None:
+                return PermissionResultDeny(
+                    message=f"{tool_name} call missing file_path",
+                    interrupt=False,
+                )
+            if not _is_inside(target, scope):
+                return PermissionResultDeny(
+                    message=(
+                        f"{tool_name} target {target} is outside the allowed "
+                        f"write scope {scope}. Refused."
+                    ),
+                    interrupt=False,
+                )
+            return PermissionResultAllow()
+        # Anything else (Bash, web, network, MCP tools) — deny by default.
+        return PermissionResultDeny(
+            message=f"tool {tool_name!r} is not enabled in this scope",
+            interrupt=False,
+        )
+
+    return can_use_tool
+
+
 def _find_claude_cli() -> Optional[str]:
     """Locate claude.exe / claude. Honors $CLAUDE_AGENT_CLI_PATH override."""
     override = os.environ.get("CLAUDE_AGENT_CLI_PATH", "")
@@ -70,7 +130,11 @@ class ClaudeAgentSDKProvider(Provider):
         timeout: int = 60,
         allowed_tools: Optional[list[str]] = None,
         cwd: Optional[str] = None,
+        write_scope: Optional[str] = None,
     ) -> InferenceResult:
+        """write_scope: when Write/Edit are in allowed_tools, refuse any
+        write whose path resolves outside this directory. Pass the
+        project's repo root as write_scope to keep agent edits scoped."""
         if images:
             raise ProviderError("SDK provider doesn't support images in v1")
 
@@ -94,23 +158,53 @@ class ClaudeAgentSDKProvider(Provider):
             )
 
         # Decide max_turns based on whether tools are allowed. With tools,
-        # the agent may need multiple turns to read/grep/synthesize.
+        # the agent may need multiple turns to read/grep/synthesize. Edit
+        # workflows need more turns than pure investigation.
         effective_tools = list(allowed_tools or [])
-        max_turns_value = 8 if effective_tools else 1
+        write_tools_present = any(t in effective_tools for t in ("Write", "Edit"))
+        if not effective_tools:
+            max_turns_value = 1
+        elif write_tools_present:
+            max_turns_value = 20
+        else:
+            max_turns_value = 8
+
+        # Always disallow Bash from this provider — too broad for safe
+        # autonomous use. (L4 / shell mode would be a separate provider
+        # with its own command allowlist.)
+        disallowed = ["Bash"]
+
+        # Build the write-scope guard if write tools are enabled.
+        permission_callback = None
+        if write_tools_present and write_scope:
+            permission_callback = _build_write_scope_callback(write_scope)
+
+        async def _streaming_prompt():
+            """When can_use_tool is set the SDK requires AsyncIterable mode."""
+            yield {
+                "type": "user",
+                "message": {"role": "user", "content": prompt},
+            }
 
         async def _run() -> tuple[str, dict]:
             kwargs = {
                 "model": model,
                 "cli_path": cli_path,
                 "allowed_tools": effective_tools,
+                "disallowed_tools": disallowed,
                 "max_turns": max_turns_value,
             }
             if cwd:
                 kwargs["cwd"] = cwd
+            if permission_callback is not None:
+                kwargs["can_use_tool"] = permission_callback
             options = ClaudeAgentOptions(**kwargs)
             text_parts: list[str] = []
             metadata: dict = {}
-            async for message in query(prompt=prompt, options=options):
+            # Streaming-mode prompt is required when can_use_tool is set;
+            # safe to use it always.
+            prompt_arg = _streaming_prompt() if permission_callback else prompt
+            async for message in query(prompt=prompt_arg, options=options):
                 if isinstance(message, AssistantMessage):
                     for block in message.content:
                         # TextBlock has .text; other block types ignored.

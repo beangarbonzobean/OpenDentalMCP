@@ -46,6 +46,7 @@ def dispatch(
     timeout: int = 120,
     allowed_tools: Optional[list[str]] = None,
     cwd: Optional[str] = None,
+    write_scope: Optional[str] = None,
 ) -> InferenceResult:
     """Route to a provider, call it, fall through on failure. Logs both
     decision and outcome to utilization.db.
@@ -80,6 +81,7 @@ def dispatch(
                 timeout=timeout,
                 allowed_tools=allowed_tools,
                 cwd=cwd,
+                write_scope=write_scope,
             )
         except ProviderError as e:
             last_err = e

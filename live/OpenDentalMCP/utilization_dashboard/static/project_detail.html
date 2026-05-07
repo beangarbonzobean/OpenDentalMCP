@@ -81,7 +81,8 @@ header .updated { color: var(--text-dim); font-size: 12px; margin-left: auto; }
 }
 .bullet-text { flex: 1; }
 .bullet-text strong { font-weight: 600; }
-button.investigate {
+.bullet-actions { display: flex; gap: 4px; flex-shrink: 0; flex-wrap: nowrap; }
+button.bullet-btn {
   background: var(--panel);
   border: 1px solid var(--panel-border);
   color: var(--text-dim);
@@ -91,23 +92,66 @@ button.investigate {
   border-radius: 3px;
   cursor: pointer;
   white-space: nowrap;
-  flex-shrink: 0;
 }
-button.investigate:hover { color: var(--text); border-color: var(--accent); }
-button.investigate:disabled { opacity: 0.5; cursor: wait; }
-button.investigate.has-result { color: var(--good); border-color: var(--good); }
+button.bullet-btn:hover { color: var(--text); border-color: var(--accent); }
+button.bullet-btn:disabled { opacity: 0.5; cursor: wait; }
+button.bullet-btn.has-result { color: var(--good); border-color: var(--good); }
+button.bullet-btn.l3 { color: var(--warn); border-color: var(--warn); opacity: 0.85; }
+button.bullet-btn.l3:hover { color: var(--bad); border-color: var(--bad); opacity: 1; }
+button.bullet-btn.l3:disabled { opacity: 0.4; }
 
-.investigation-output {
+.investigation-output, .proposal-output {
   margin-top: 10px;
   margin-left: 18px;
   padding: 12px 14px;
   background: var(--bg);
-  border-left: 3px solid var(--accent);
   border-radius: 0 6px 6px 0;
   font-size: 13px; line-height: 1.5;
   display: none;
 }
-.investigation-output.expanded { display: block; }
+.investigation-output { border-left: 3px solid var(--accent); }
+.proposal-output { border-left: 3px solid var(--warn); }
+.proposal-output.applied { border-left-color: var(--good); }
+.proposal-output.discarded { border-left-color: var(--neutral); }
+.proposal-output.failed { border-left-color: var(--bad); }
+.investigation-output.expanded, .proposal-output.expanded { display: block; }
+.proposal-output .actions { display: flex; gap: 8px; margin-top: 10px; }
+.proposal-output button.apply { color: var(--good); border-color: var(--good); }
+.proposal-output button.apply:hover { background: rgba(46, 160, 67, 0.1); }
+.proposal-output button.discard { color: var(--bad); border-color: var(--bad); }
+.proposal-output button.discard:hover { background: rgba(248, 81, 73, 0.1); }
+.proposal-output pre.diff {
+  background: #0a0d12;
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin: 8px 0;
+  font: 11px/1.4 ui-monospace, monospace;
+  color: var(--text-dim);
+  overflow: auto;
+  max-height: 320px;
+  white-space: pre;
+}
+.proposal-output pre.diff .added { color: var(--good); }
+.proposal-output pre.diff .removed { color: var(--bad); }
+.proposal-output pre.diff .header { color: var(--accent); }
+.proposal-output .files-changed {
+  display: flex; flex-wrap: wrap; gap: 4px 8px; margin: 4px 0;
+  font-size: 11px; color: var(--text-dim);
+}
+.proposal-output .files-changed code {
+  background: rgba(255,255,255,0.06);
+  padding: 1px 5px; border-radius: 3px;
+}
+.proposal-output .conf {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 6px; border-radius: 3px;
+  letter-spacing: 0.04em; margin-left: 6px;
+}
+.proposal-output .conf.HIGH { background: rgba(46, 160, 67, 0.18); color: var(--good); }
+.proposal-output .conf.MEDIUM { background: rgba(210, 153, 34, 0.18); color: var(--warn); }
+.proposal-output .conf.LOW { background: rgba(248, 81, 73, 0.18); color: var(--bad); }
 .investigation-output h3, .investigation-output h4 {
   margin: 0 0 6px; font-size: 12px; font-weight: 600;
   text-transform: none; letter-spacing: 0; color: var(--text);
@@ -244,6 +288,80 @@ function renderInvestigation(md) {
   return out.join('');
 }
 
+function renderDiff(diff) {
+  if (!diff) return '<em class="dim">No diff captured.</em>';
+  const lines = diff.split('\n').map(ln => {
+    if (ln.startsWith('+++') || ln.startsWith('---') || ln.startsWith('diff ')) {
+      return `<span class="header">${escape(ln)}</span>`;
+    }
+    if (ln.startsWith('+')) return `<span class="added">${escape(ln)}</span>`;
+    if (ln.startsWith('-')) return `<span class="removed">${escape(ln)}</span>`;
+    return escape(ln);
+  });
+  return `<pre class="diff">${lines.join('\n')}</pre>`;
+}
+
+function renderProposal(p, bulletHash) {
+  if (!p) return '';
+  const conf = (p.summary || '').match(/\b(HIGH|MEDIUM|LOW)\b/);
+  const confTag = conf ? `<span class="conf ${conf[1]}">${conf[1]}</span>` : '';
+  const filesHtml = (p.files_changed && p.files_changed.length)
+    ? '<div class="files-changed">' +
+      p.files_changed.map(f => '<code>' + escape(f) + '</code>').join('') +
+      '</div>'
+    : '<div class="dim" style="font-size:11px;">No files changed.</div>';
+  const actionsHtml = (p.status === 'pending')
+    ? `<div class="actions">
+         <button class="bullet-btn apply" data-action="apply" data-bullet-hash="${escape(bulletHash)}">Apply to main</button>
+         <button class="bullet-btn discard" data-action="discard" data-bullet-hash="${escape(bulletHash)}">Discard</button>
+       </div>`
+    : '';
+  const statusLabel = (p.status || 'pending').toUpperCase();
+  const errorHtml = p.error ? `<div class="bullet-error" style="margin-top:6px;font-size:12px;">${escape(p.error)}</div>` : '';
+  return `
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
+      <span style="font-weight:600;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-dim);">
+        ${escape((p.mode || '').toUpperCase() || 'PROPOSAL')} · ${escape(statusLabel)}${confTag}
+      </span>
+      <span style="font-size:10px;color:var(--text-dim);">${escape(p.provider_used || '')} (${escape(p.model_used || '')}) · ${fmtAge(p.ts)}</span>
+    </div>
+    ${renderInvestigation(p.summary || '')}
+    ${filesHtml}
+    ${renderDiff(p.diff)}
+    ${errorHtml}
+    ${actionsHtml}
+  `;
+}
+
+function bindProposalActions(panel) {
+  panel.querySelectorAll('button[data-action]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const action = btn.dataset.action;  // 'apply' | 'discard'
+      const h = btn.dataset.bulletHash;
+      btn.disabled = true;
+      const orig = btn.textContent;
+      btn.textContent = action === 'apply' ? 'Applying…' : 'Discarding…';
+      try {
+        const res = await fetch(
+          `/utilization/api/projects/${encodeURIComponent(projectId)}/proposals/${encodeURIComponent(h)}/${action}`,
+          { method: 'POST' }
+        );
+        const d = await res.json();
+        if (!res.ok || d.error) {
+          alert((d.error || 'failed') + '');
+          btn.disabled = false; btn.textContent = orig;
+          return;
+        }
+        // Reload the page to reflect new state
+        loadDetail();
+      } catch (e) {
+        alert(e.message || e);
+        btn.disabled = false; btn.textContent = orig;
+      }
+    });
+  });
+}
+
 // SHA-1 of a string, hex, first 16 chars — must match the server's hash.
 async function bulletHash(text) {
   const bytes = new TextEncoder().encode(text);
@@ -269,6 +387,7 @@ async function loadDetail() {
     const health = status.health || {};
     const ns = d.next_steps;
     const investigations = d.investigations || {};
+    const proposals = d.proposals || {};
 
     document.getElementById('title').textContent = status.name || 'Project';
     document.getElementById('breadcrumb').innerHTML =
@@ -281,20 +400,38 @@ async function loadDetail() {
       ? (await Promise.all(bullets.map(async (b) => {
           const h = await bulletHash(b);
           const inv = investigations[h];
-          const hasResult = !!inv;
+          const prop = proposals[h];
+          const hasInv = !!inv;
+          const hasProp = !!prop;
           return `
             <div class="bullet-block">
               <div class="bullet-row">
                 <div class="bullet-text">${renderInline(b)}</div>
-                <button class="investigate ${hasResult ? 'has-result' : ''}"
-                        data-bullet-text="${encodeURIComponent(b)}"
-                        data-bullet-hash="${h}">
-                  ${hasResult ? '↻ Re-investigate' : 'Investigate'}
-                </button>
+                <div class="bullet-actions">
+                  <button class="bullet-btn investigate ${hasInv ? 'has-result' : ''}"
+                          data-bullet-text="${encodeURIComponent(b)}"
+                          data-bullet-hash="${h}">
+                    ${hasInv ? '↻ Investigate' : 'Investigate'}
+                  </button>
+                  <button class="bullet-btn propose"
+                          data-bullet-text="${encodeURIComponent(b)}"
+                          data-bullet-hash="${h}">
+                    Propose (L2)
+                  </button>
+                  <button class="bullet-btn l3 autopilot"
+                          data-bullet-text="${encodeURIComponent(b)}"
+                          data-bullet-hash="${h}"
+                          title="Agent runs in worktree, auto-merges to main if confidence is HIGH">
+                    Auto-apply (L3)
+                  </button>
+                </div>
               </div>
-              <div class="investigation-output ${hasResult ? 'expanded' : ''}" id="inv-${h}">
+              <div class="investigation-output ${hasInv ? 'expanded' : ''}" id="inv-${h}">
                 ${inv ? renderInvestigation(inv.content) : ''}
-                ${inv ? `<div class="investigation-meta">via ${escape(inv.provider_used || '')} (${escape(inv.model_used || '')}) · ${fmtAge(inv.ts)} · tools: ${(inv.tools_used || []).join(', ')}</div>` : ''}
+                ${inv ? `<div class="investigation-meta">L1 · ${escape(inv.provider_used || '')} (${escape(inv.model_used || '')}) · ${fmtAge(inv.ts)} · tools: ${(inv.tools_used || []).join(', ')}</div>` : ''}
+              </div>
+              <div class="proposal-output ${hasProp ? 'expanded' : ''} ${hasProp ? escape(prop.status || '') : ''}" id="prop-${h}">
+                ${hasProp ? renderProposal(prop, h) : ''}
               </div>
             </div>`;
         }))).join('')
@@ -363,9 +500,9 @@ async function loadDetail() {
           } else {
             out.innerHTML =
               renderInvestigation(d.content) +
-              `<div class="investigation-meta">via ${escape(d.provider || '')} (${escape(d.model || '')}) · just now · cwd: <code>${escape(d.cwd || '')}</code></div>`;
+              `<div class="investigation-meta">L1 · ${escape(d.provider || '')} (${escape(d.model || '')}) · just now · cwd: <code>${escape(d.cwd || '')}</code></div>`;
             btn.classList.add('has-result');
-            btn.textContent = '↻ Re-investigate';
+            btn.textContent = '↻ Investigate';
           }
         } catch (e) {
           out.innerHTML = `<div class="bullet-error">${escape(e.message || e)}</div>`;
@@ -375,6 +512,71 @@ async function loadDetail() {
         }
       });
     });
+
+    // Wire up Propose (L2) and Auto-apply (L3) buttons
+    function bindProposeButton(btn, mode) {
+      btn.addEventListener('click', async () => {
+        const text = decodeURIComponent(btn.dataset.bulletText);
+        const h = btn.dataset.bulletHash;
+        if (mode === 'l3') {
+          const ok = window.confirm(
+            'AUTO-APPLY (L3): the agent will run in an isolated git worktree, ' +
+            'edit files in this project, and AUTO-MERGE the result into main if it ' +
+            'reports HIGH confidence. Lower-confidence proposals stay pending for review.\n\n' +
+            'Continue?'
+          );
+          if (!ok) return;
+        }
+        const out = document.getElementById('prop-' + h);
+        const allBtns = c.querySelectorAll(`button[data-bullet-hash="${h}"]`);
+        allBtns.forEach(b => b.disabled = true);
+        const original = btn.textContent;
+        btn.textContent = mode === 'l3' ? 'Running L3…' : 'Drafting…';
+        out.classList.add('expanded');
+        out.classList.remove('applied', 'discarded', 'failed');
+        out.innerHTML = `<em>Agent ${mode === 'l3' ? 'editing + auto-applying' : 'drafting a change'} in an isolated worktree. 1-3 min typical.</em>`;
+        try {
+          const res = await fetch(
+            `/utilization/api/projects/${encodeURIComponent(projectId)}/propose`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ bullet_text: text, mode }),
+            }
+          );
+          const d = await res.json();
+          if (!res.ok || d.error) {
+            out.classList.add('failed');
+            out.innerHTML = `<div class="bullet-error">${escape(d.error || 'failed')}</div>`;
+          } else {
+            out.classList.add(d.status || 'pending');
+            out.innerHTML = renderProposal({
+              status: d.status,
+              summary: d.summary,
+              files_changed: d.files_changed,
+              diff: d.diff,
+              mode: d.mode,
+              ts: d.ts,
+              provider_used: d.provider,
+              model_used: d.model,
+              latency_ms: d.latency_ms,
+              error: d.apply_message && !d.auto_applied ? d.apply_message : '',
+            }, h);
+          }
+        } catch (e) {
+          out.classList.add('failed');
+          out.innerHTML = `<div class="bullet-error">${escape(e.message || e)}</div>`;
+        } finally {
+          allBtns.forEach(b => b.disabled = false);
+          btn.textContent = original;
+        }
+      });
+    }
+    c.querySelectorAll('button.propose').forEach(b => bindProposeButton(b, 'l2'));
+    c.querySelectorAll('button.autopilot').forEach(b => bindProposeButton(b, 'l3'));
+
+    // Wire up Apply / Discard buttons inside any rendered proposals
+    c.querySelectorAll('.proposal-output').forEach(panel => bindProposalActions(panel));
 
     // Regenerate next-steps button
     const regen = document.getElementById('refresh-ns');
