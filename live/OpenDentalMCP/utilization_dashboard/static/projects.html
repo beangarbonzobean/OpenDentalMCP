@@ -38,6 +38,72 @@ header .updated { color: var(--text-dim); font-size: 12px; margin-left: auto; }
   text-transform: uppercase;
   color: var(--text-dim);
 }
+.manager-brief {
+  margin: 14px 14px 8px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  padding: 16px 18px;
+}
+.manager-brief h2 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent);
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.manager-brief .body {
+  font-size: 13px;
+  line-height: 1.55;
+}
+.manager-brief .body h3 {
+  margin: 12px 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text);
+}
+.manager-brief .body h3:first-child { margin-top: 0; }
+.manager-brief .body ul { padding-left: 20px; margin: 4px 0; }
+.manager-brief .body li { margin: 4px 0; }
+.manager-brief .body strong { font-weight: 600; }
+.manager-brief .body code {
+  background: rgba(255,255,255,0.06);
+  padding: 1px 5px; border-radius: 3px;
+  font-size: 12px;
+}
+.manager-brief .meta {
+  margin-top: 10px;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.manager-brief button.refresh-mgr {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.manager-brief button.refresh-mgr:hover { color: var(--text); border-color: var(--accent); }
+.manager-brief button.refresh-mgr:disabled { opacity: 0.5; cursor: wait; }
+.manager-brief .stale {
+  display: inline-block;
+  background: rgba(210, 153, 34, 0.18);
+  color: var(--warn);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  margin-left: 6px;
+  letter-spacing: 0.04em;
+}
 
 .grid {
   display: grid;
@@ -128,9 +194,56 @@ button.refresh-ns:disabled { opacity: 0.5; cursor: wait; }
   <span class="updated" id="updated">—</span>
 </header>
 
+<div class="manager-brief" id="manager-brief">
+  <h2>
+    <span>Manager's brief · portfolio view <span id="mgr-stale"></span></span>
+    <button class="refresh-mgr" id="btn-refresh-mgr" type="button">Refresh</button>
+  </h2>
+  <div class="body" id="mgr-body"><em>No brief yet — click Refresh.</em></div>
+  <div class="meta" id="mgr-meta"></div>
+</div>
+
 <div id="domains"></div>
 
 <script>
+function escapeStr(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function renderInline(s) {
+  let out = escapeStr(s);
+  out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  out = out.replace(/`([^`]+)`/g, '<code>$1</code>');
+  return out.replace(/\n/g, '<br>');
+}
+
+// Markdown renderer for the manager's brief — supports h3 headers + bullets.
+function renderMarkdownRich(md) {
+  if (!md) return '<em>Empty.</em>';
+  const lines = md.split('\n');
+  const out = [];
+  let inList = false;
+  const flushList = () => { if (inList) { out.push('</ul>'); inList = false; } };
+  for (const raw of lines) {
+    const ln = raw.trimEnd();
+    let m;
+    if ((m = ln.match(/^#{2,4}\s+(.+)$/))) {
+      flushList();
+      out.push(`<h3>${renderInline(m[1])}</h3>`);
+    } else if (/^\s*[-*]\s+/.test(ln)) {
+      if (!inList) { out.push('<ul>'); inList = true; }
+      out.push('<li>' + renderInline(ln.replace(/^\s*[-*]\s+/, '')) + '</li>');
+    } else if (ln.trim() === '') {
+      flushList();
+    } else {
+      flushList();
+      out.push('<div>' + renderInline(ln) + '</div>');
+    }
+  }
+  flushList();
+  return out.join('');
+}
+
 function fmtAge(iso) {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -297,8 +410,61 @@ async function refresh() {
   }
 }
 
+// Manager's brief — render existing + wire up refresh
+async function loadManagerBrief() {
+  try {
+    const r = await fetch('/utilization/api/manager/snapshot', { cache: 'no-store' });
+    const d = await r.json();
+    const brief = d.brief;
+    const body = document.getElementById('mgr-body');
+    const meta = document.getElementById('mgr-meta');
+    const stale = document.getElementById('mgr-stale');
+    if (!brief) {
+      body.innerHTML = '<em>No brief yet — click Refresh to ask the manager agent for a portfolio review.</em>';
+      meta.textContent = '';
+      stale.textContent = '';
+      return;
+    }
+    body.innerHTML = renderMarkdownRich(brief.content || '');
+    meta.textContent =
+      `via ${brief.provider_used || ''} (${brief.model_used || ''}) · ${fmtAge(brief.ts)} · ` +
+      `${(brief.projects_in_bundle || []).length} projects · ${brief.bundle_chars || 0} chars in prompt`;
+    // Stale > 6h
+    const ageHrs = brief.ts ? (Date.now() - new Date(brief.ts).getTime()) / 3600000 : 999;
+    stale.textContent = ageHrs > 6 ? 'STALE' : '';
+  } catch (e) {
+    document.getElementById('mgr-body').innerHTML = '<em>fetch error: ' + escapeStr(e.message) + '</em>';
+  }
+}
+
+const mgrBtn = document.getElementById('btn-refresh-mgr');
+if (mgrBtn) {
+  mgrBtn.addEventListener('click', async () => {
+    mgrBtn.disabled = true;
+    const orig = mgrBtn.textContent;
+    mgrBtn.textContent = 'Asking Sonnet…';
+    document.getElementById('mgr-body').innerHTML = '<em>Manager agent reviewing all 6 projects (60–120s typical)…</em>';
+    try {
+      const r = await fetch('/utilization/api/manager/refresh', { method: 'POST' });
+      const d = await r.json();
+      if (!r.ok || d.error) {
+        document.getElementById('mgr-body').innerHTML = '<em style="color:var(--bad);">' + escapeStr(d.error || 'failed') + '</em>';
+      } else {
+        await loadManagerBrief();
+      }
+    } catch (e) {
+      document.getElementById('mgr-body').innerHTML = '<em style="color:var(--bad);">' + escapeStr(e.message || e) + '</em>';
+    } finally {
+      mgrBtn.disabled = false;
+      mgrBtn.textContent = orig;
+    }
+  });
+}
+
+loadManagerBrief();
 refresh();
 setInterval(refresh, 30000);
+setInterval(loadManagerBrief, 60000);
 </script>
 </body>
 </html>

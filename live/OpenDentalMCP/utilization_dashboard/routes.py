@@ -32,6 +32,7 @@ from flask import Blueprint, abort, jsonify, request, send_from_directory
 from utilization_dashboard import (
     context_bundler,
     gpu_poller,
+    manager_bundler,
     pipeline_poller,
     projects_poller,
     projects_storage,
@@ -136,6 +137,59 @@ def api_projects_snapshot():
     for s in statuses:
         s["next_steps"] = cached.get(s["id"])
     return jsonify({"projects": statuses})
+
+
+@utilization_bp.get("/api/manager/snapshot")
+def api_manager_snapshot():
+    """Latest manager's brief + metadata for the projects-page header."""
+    return jsonify({"brief": projects_storage.latest_manager_brief()})
+
+
+@utilization_bp.post("/api/manager/refresh")
+def api_manager_refresh():
+    """Bundle all-project state and ask Sonnet to produce a portfolio brief."""
+    prompt, summary = manager_bundler.build()
+
+    try:
+        from inference_router import Profile, dispatch
+    except ImportError:
+        return jsonify({"error": "inference_router not installed"}), 500
+
+    try:
+        result = dispatch(
+            Profile(
+                fits_local=False,
+                prefers_high_end=True,         # nudge toward Sonnet
+                tag="manager-brief",
+                max_output_tokens=1500,
+            ),
+            prompt,
+            max_tokens=1500,
+            timeout=240,
+        )
+    except Exception as e:
+        log.exception("manager refresh dispatch failed: %s", e)
+        return jsonify({"error": f"dispatch failed: {type(e).__name__}: {e}"}), 502
+
+    ts = projects_storage.write_manager_brief(
+        content=result.text,
+        model_used=result.model,
+        provider_used=result.provider,
+        latency_ms=result.latency_ms,
+        cost_usd=result.cost_usd,
+        projects_in_bundle=summary.project_ids,
+        bundle_chars=summary.total_chars,
+    )
+    return jsonify({
+        "ok": True,
+        "ts": ts,
+        "content": result.text,
+        "provider": result.provider,
+        "model": result.model,
+        "latency_ms": result.latency_ms,
+        "projects_in_bundle": summary.project_ids,
+        "bundle_chars": summary.total_chars,
+    })
 
 
 @utilization_bp.get("/api/projects/<project_id>/detail")

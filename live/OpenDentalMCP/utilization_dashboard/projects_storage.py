@@ -49,6 +49,18 @@ CREATE TABLE IF NOT EXISTS project_investigation (
 CREATE INDEX IF NOT EXISTS idx_pi_project_bullet
     ON project_investigation (project_id, bullet_hash, ts DESC);
 
+CREATE TABLE IF NOT EXISTS manager_brief (
+    ts                 TEXT PRIMARY KEY,
+    content            TEXT NOT NULL,
+    model_used         TEXT,
+    provider_used      TEXT,
+    latency_ms         INTEGER,
+    cost_usd           REAL,
+    projects_in_bundle TEXT,                -- JSON list of project ids
+    bundle_chars       INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_manager_brief_ts ON manager_brief(ts DESC);
+
 CREATE TABLE IF NOT EXISTS project_proposal (
     project_id      TEXT NOT NULL,
     bullet_hash     TEXT NOT NULL,
@@ -212,6 +224,46 @@ def investigations_for_project(project_id: str) -> dict[str, dict]:
                 pass
         out[d["bullet_hash"]] = d
     return out
+
+
+def write_manager_brief(
+    *,
+    content: str,
+    model_used: str = "",
+    provider_used: str = "",
+    latency_ms: int = 0,
+    cost_usd: float = 0.0,
+    projects_in_bundle: Optional[list[str]] = None,
+    bundle_chars: int = 0,
+) -> str:
+    _init()
+    ts = _now_iso()
+    with _conn() as db:
+        db.execute(
+            "INSERT OR REPLACE INTO manager_brief "
+            "(ts, content, model_used, provider_used, latency_ms, cost_usd, "
+            " projects_in_bundle, bundle_chars) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (ts, content, model_used, provider_used, latency_ms, cost_usd,
+             json.dumps(projects_in_bundle or []), bundle_chars),
+        )
+    return ts
+
+
+def latest_manager_brief() -> Optional[dict]:
+    _init()
+    with _conn() as db:
+        row = db.execute(
+            "SELECT * FROM manager_brief ORDER BY ts DESC LIMIT 1"
+        ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    if d.get("projects_in_bundle"):
+        try:
+            d["projects_in_bundle"] = json.loads(d["projects_in_bundle"])
+        except json.JSONDecodeError:
+            pass
+    return d
 
 
 def write_proposal(
