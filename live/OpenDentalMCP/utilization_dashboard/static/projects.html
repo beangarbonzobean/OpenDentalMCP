@@ -285,6 +285,168 @@ header .updated { color: var(--text-dim); font-size: 12px; margin-left: auto; }
   text-transform: uppercase;
 }
 
+/* Spinner + live-running animation */
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pulse-bg {
+  0%, 100% { background-color: var(--bg); }
+  50%      { background-color: rgba(210, 153, 34, 0.06); }
+}
+.spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(210, 153, 34, 0.25);
+  border-top-color: var(--warn);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+  margin-right: 8px;
+  vertical-align: -2px;
+}
+.running-panel {
+  animation: pulse-bg 2.4s ease-in-out infinite;
+}
+.running-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.running-line .running-phase { color: var(--text); }
+.running-line .running-elapsed {
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-left: auto;
+  letter-spacing: 0.04em;
+}
+.running-bar {
+  margin-top: 8px;
+  height: 3px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+}
+.running-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 30%;
+  background: linear-gradient(90deg,
+    transparent,
+    var(--warn),
+    transparent);
+  animation: bar-slide 1.6s ease-in-out infinite;
+}
+@keyframes bar-slide {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+
+/* Minimize + tabs */
+.manager-brief .header-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.manager-brief button.icon-btn {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  line-height: 1;
+}
+.manager-brief button.icon-btn:hover { color: var(--text); border-color: var(--accent); }
+
+.mgr-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 10px 0 4px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--panel-border);
+  padding-bottom: 6px;
+}
+.mgr-tabs button {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  letter-spacing: 0.02em;
+}
+.mgr-tabs button:hover { color: var(--text); }
+.mgr-tabs button.active {
+  color: var(--text);
+  background: rgba(47, 129, 247, 0.12);
+  border-color: var(--accent);
+}
+.mgr-tabs .count {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 10px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.mgr-tabs button.active .count { color: var(--accent); }
+
+/* Section filtering — applied via .filter-section-N on the brief root */
+.manager-brief.filtered .body > h3,
+.manager-brief.filtered .body > .mgr-bullet,
+.manager-brief.filtered .body > .mgr-poc-picker,
+.manager-brief.filtered .body > .mgr-action-result-slot {
+  display: none;
+}
+.manager-brief.filtered .body > .visible-section { display: revert; }
+.manager-brief.filtered .body > .visible-section.mgr-bullet { display: flex; }
+.manager-brief.filtered .body > .visible-section.mgr-poc-picker { display: none; }
+.manager-brief.filtered .body > .visible-section.mgr-poc-picker.expanded { display: flex; }
+.manager-brief.filtered .body > .visible-section.mgr-action-result-slot { display: block; }
+
+/* Minimize collapses everything below the header */
+.manager-brief.minimized .idea-box,
+.manager-brief.minimized .mgr-tabs,
+.manager-brief.minimized .body,
+.manager-brief.minimized .meta {
+  display: none;
+}
+
+/* Per-result collapse */
+.mgr-action-output .toggle-result,
+.mgr-poc-result .toggle-result {
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  color: var(--text-dim);
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+  margin-left: 6px;
+  line-height: 1;
+}
+.mgr-action-output .toggle-result:hover,
+.mgr-poc-result .toggle-result:hover { color: var(--text); border-color: var(--accent); }
+.mgr-action-output.collapsed > *:not(.result-header),
+.mgr-poc-result.collapsed > *:not(.result-header) {
+  display: none;
+}
+.result-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--text-dim);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
@@ -377,8 +539,12 @@ button.refresh-ns:disabled { opacity: 0.5; cursor: wait; }
 <div class="manager-brief" id="manager-brief">
   <h2>
     <span>Manager's brief · portfolio view <span id="mgr-stale"></span></span>
-    <button class="refresh-mgr" id="btn-refresh-mgr" type="button">Refresh</button>
+    <span class="header-controls">
+      <button class="icon-btn" id="btn-minimize-mgr" type="button" title="Minimize the manager panel">_</button>
+      <button class="refresh-mgr" id="btn-refresh-mgr" type="button">Refresh</button>
+    </span>
   </h2>
+  <div class="mgr-tabs" id="mgr-tabs"></div>
   <div class="idea-box">
     <label for="idea-input">Submit an idea — manager will read context and add a bullet</label>
     <textarea id="idea-input" placeholder="e.g. We should integrate Modento into the intake auto-filing pipeline so manual review queues stay synced." maxlength="4000"></textarea>
@@ -397,6 +563,230 @@ button.refresh-ns:disabled { opacity: 0.5; cursor: wait; }
 <script>
 function escapeStr(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ---------------------------------------------------------------------------
+// Live "running" UI: animated spinner + elapsed timer + phase-appropriate
+// status text. Refreshes via setInterval on each .running panel so the
+// screen stays alive between the 4s adaptive polls.
+// ---------------------------------------------------------------------------
+
+const _runningTimers = new WeakMap();   // element -> interval id
+
+function _phaseFor(action, sec) {
+  if (action === 'plan') {
+    if (sec < 5)  return 'Bundling portfolio context…';
+    if (sec < 15) return 'Sonnet reading the project landscape…';
+    if (sec < 45) return 'Sonnet drafting the implementation plan…';
+    return 'Sonnet finalizing the plan…';
+  }
+  if (action === 'investigate') {
+    if (sec < 5)  return 'Bundling project context…';
+    if (sec < 15) return 'Agent reading source files…';
+    if (sec < 45) return 'Agent grepping the codebase for evidence…';
+    if (sec < 90) return 'Agent synthesizing findings…';
+    return 'Agent wrapping up the report…';
+  }
+  if (action === 'draft-poc') {
+    if (sec < 5)   return 'Creating an isolated git worktree…';
+    if (sec < 15)  return 'Bundling project context…';
+    if (sec < 45)  return 'Agent reading code…';
+    if (sec < 90)  return 'Agent drafting the change…';
+    if (sec < 150) return 'Agent writing files in the worktree…';
+    return 'Capturing the diff and finalizing…';
+  }
+  if (action === 'user-idea') {
+    if (sec < 5)  return 'Bundling portfolio context…';
+    if (sec < 15) return 'Opus reading the projects…';
+    if (sec < 45) return 'Opus shaping a polished bullet…';
+    return 'Opus finalizing the bullet…';
+  }
+  return 'Working…';
+}
+
+function _formatElapsed(sec) {
+  if (sec < 60) return sec + 's';
+  const m = Math.floor(sec / 60), s = sec % 60;
+  return m + ':' + String(s).padStart(2, '0');
+}
+
+function buildRunningHtml(action, startIso, label) {
+  // label is the visible kind of work, e.g. "Plan" / "Investigate" / "PoC"
+  return `
+    <div class="running-line">
+      <span class="spinner"></span>
+      <span class="running-phase" data-action="${escapeStr(action)}"
+            data-start="${escapeStr(startIso || '')}">${escapeStr(label || 'Working…')}</span>
+      <span class="running-elapsed">0s</span>
+    </div>
+    <div class="running-bar"></div>
+  `;
+}
+
+// ---------------------------------------------------------------------------
+// Minimize + tabs + per-result collapse
+// ---------------------------------------------------------------------------
+
+const MGR_MINIMIZED_KEY = 'utilization.mgrMinimized';
+const MGR_ACTIVE_TAB_KEY = 'utilization.mgrActiveTab';
+const MGR_COLLAPSED_RESULTS_KEY = 'utilization.mgrCollapsedResults';
+
+function loadCollapsedResults() {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(MGR_COLLAPSED_RESULTS_KEY) || '[]'));
+  } catch (e) { return new Set(); }
+}
+function saveCollapsedResults(set) {
+  try {
+    localStorage.setItem(MGR_COLLAPSED_RESULTS_KEY, JSON.stringify([...set]));
+  } catch (e) { /* ignore */ }
+}
+
+function applyMinimizedState() {
+  const root = document.getElementById('manager-brief');
+  const minimized = localStorage.getItem(MGR_MINIMIZED_KEY) === '1';
+  if (root) root.classList.toggle('minimized', minimized);
+  const btn = document.getElementById('btn-minimize-mgr');
+  if (btn) btn.textContent = minimized ? '+' : '_';
+  if (btn) btn.title = minimized ? 'Expand the manager panel' : 'Minimize the manager panel';
+}
+function wireUpMinimize() {
+  const btn = document.getElementById('btn-minimize-mgr');
+  if (!btn || btn.dataset.wired === '1') return;
+  btn.dataset.wired = '1';
+  btn.addEventListener('click', () => {
+    const cur = localStorage.getItem(MGR_MINIMIZED_KEY) === '1';
+    localStorage.setItem(MGR_MINIMIZED_KEY, cur ? '0' : '1');
+    applyMinimizedState();
+  });
+}
+
+function renderTabs() {
+  const tabs = document.getElementById('mgr-tabs');
+  const sections = window._lastManagerSections || [];
+  if (!tabs) return;
+  if (!sections.length) {
+    tabs.innerHTML = '';
+    return;
+  }
+  const active = localStorage.getItem(MGR_ACTIVE_TAB_KEY) || 'all';
+  const totalBullets = sections.reduce((n, s) => n + s.bullets.length, 0);
+  const buttons = [
+    `<button data-section-id="all" class="${active === 'all' ? 'active' : ''}">
+       All <span class="count">${totalBullets}</span>
+     </button>`
+  ];
+  for (let si = 0; si < sections.length; si++) {
+    const s = sections[si];
+    if (!s.bullets.length) continue;
+    const sid = `s${si}`;
+    buttons.push(
+      `<button data-section-id="${sid}" class="${active === sid ? 'active' : ''}">
+         ${escapeStr(s.section)} <span class="count">${s.bullets.length}</span>
+       </button>`
+    );
+  }
+  tabs.innerHTML = buttons.join('');
+  // Wire clicks
+  tabs.querySelectorAll('button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      localStorage.setItem(MGR_ACTIVE_TAB_KEY, btn.dataset.sectionId);
+      applyTabFilter();
+    });
+  });
+}
+
+function applyTabFilter() {
+  const root = document.getElementById('manager-brief');
+  if (!root) return;
+  const active = localStorage.getItem(MGR_ACTIVE_TAB_KEY) || 'all';
+  // Update the active tab button
+  document.querySelectorAll('#mgr-tabs button').forEach(b => {
+    b.classList.toggle('active', b.dataset.sectionId === active);
+  });
+  if (active === 'all') {
+    root.classList.remove('filtered');
+    document.querySelectorAll('#mgr-body > *').forEach(el => {
+      el.classList.remove('visible-section');
+    });
+    return;
+  }
+  root.classList.add('filtered');
+  document.querySelectorAll('#mgr-body > *').forEach(el => {
+    if (el.dataset.sectionId === active) el.classList.add('visible-section');
+    else el.classList.remove('visible-section');
+  });
+}
+
+function applyCollapsedResults() {
+  const collapsed = loadCollapsedResults();
+  document.querySelectorAll('.mgr-action-output, .mgr-poc-result').forEach(el => {
+    const key = _resultKey(el);
+    if (collapsed.has(key)) el.classList.add('collapsed');
+    else el.classList.remove('collapsed');
+  });
+}
+function _resultKey(el) {
+  // Compose a stable key for a result element; falls back to nth-child
+  const parent = el.parentElement;
+  const idx = Array.prototype.indexOf.call(parent ? parent.children : [], el);
+  const bullet = el.closest('[data-bullet-hash]');
+  const bh = bullet ? bullet.dataset.bulletHash : 'X';
+  const action = el.dataset.action || el.querySelector('.mgr-poc-banner')?.textContent || 'r';
+  return `${bh}|${action}|${idx}`;
+}
+function injectResultHeaders() {
+  // Add a small "Result · ⌃" header to each result panel for collapse control
+  document.querySelectorAll('.mgr-action-output, .mgr-poc-result').forEach(el => {
+    if (el.querySelector('.result-header')) return;          // already injected
+    if (el.classList.contains('running')) return;            // running state has its own UI
+    const header = document.createElement('div');
+    header.className = 'result-header';
+    const label = el.classList.contains('mgr-poc-result')
+      ? 'PoC result'
+      : `${(el.dataset.action || 'result')} result`;
+    const status = el.querySelector('.mgr-poc-banner');
+    header.innerHTML = `<span>${escapeStr(label)}</span>
+      ${status ? `<span style="margin-left:auto;"></span>` : '<span style="flex:1"></span>'}
+      <button class="toggle-result" type="button">⌄</button>`;
+    el.insertBefore(header, el.firstChild);
+    const btn = header.querySelector('.toggle-result');
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const key = _resultKey(el);
+      const collapsed = loadCollapsedResults();
+      if (el.classList.contains('collapsed')) {
+        el.classList.remove('collapsed');
+        collapsed.delete(key);
+        btn.textContent = '⌄';
+      } else {
+        el.classList.add('collapsed');
+        collapsed.add(key);
+        btn.textContent = '⌃';
+      }
+      saveCollapsedResults(collapsed);
+    });
+  });
+}
+
+function activateRunningTimers(root) {
+  // Find every .running-line under `root` and start a 1s interval for each
+  (root || document).querySelectorAll('.running-line').forEach(line => {
+    if (_runningTimers.has(line)) clearInterval(_runningTimers.get(line));
+    const phaseEl = line.querySelector('.running-phase');
+    const elapsedEl = line.querySelector('.running-elapsed');
+    if (!phaseEl || !elapsedEl) return;
+    const action = phaseEl.dataset.action || '';
+    const startStr = phaseEl.dataset.start || '';
+    const start = startStr ? new Date(startStr).getTime() : Date.now();
+    const tick = () => {
+      const sec = Math.max(0, Math.floor((Date.now() - start) / 1000));
+      elapsedEl.textContent = _formatElapsed(sec);
+      phaseEl.textContent = _phaseFor(action, sec);
+    };
+    tick();
+    _runningTimers.set(line, setInterval(tick, 1000));
+  });
 }
 
 function renderInline(s) {
@@ -475,17 +865,18 @@ async function bulletHashSha1(text) {
 function renderActionResult(action, row) {
   if (!row) return '';
   const klass = row.status === 'ok' ? '' :
-                row.status === 'running' ? 'running' :
+                row.status === 'running' ? 'running running-panel' :
                 row.status === 'failed' ? 'failed' : '';
+  const label = action === 'plan' ? 'Plan' : (action === 'investigate' ? 'Investigate' : action);
   const body = row.status === 'running'
-    ? '<em>Running…</em>'
+    ? buildRunningHtml(action, row.ts, `${label} in progress`)
     : row.status === 'failed'
       ? '<span style="color:var(--bad);">' + escapeStr(row.error || 'failed') + '</span>'
       : renderMarkdownRich(row.content || '');
   const meta = row.status === 'ok'
     ? `<div class="mgr-action-meta">${escapeStr(action)} · via ${escapeStr(row.provider_used || '')} (${escapeStr(row.model_used || '')}) · ${fmtAge(row.ts)}</div>`
     : '';
-  return `<div class="mgr-action-output expanded ${klass}">${body}${meta}</div>`;
+  return `<div class="mgr-action-output expanded ${klass}" data-action="${escapeStr(action)}">${body}${meta}</div>`;
 }
 
 function renderDiff(diff) {
@@ -503,10 +894,10 @@ function renderDiff(diff) {
 function renderPocResult(projectId, projectName, prop) {
   if (!prop) return '';
   const status = (prop.status || 'pending').toUpperCase();
-  const klass = (prop.status || '').toLowerCase();
+  const klass = (prop.status || '').toLowerCase() + (prop.status === 'running' ? ' running-panel' : '');
   let body = '';
   if (prop.status === 'running') {
-    body = '<em>Drafting PoC (Sonnet, 1-3 min typical)…</em>';
+    body = buildRunningHtml('draft-poc', prop.ts, `PoC for ${projectName}`);
   } else if (prop.status === 'failed') {
     body = `<span style="color:var(--bad);">${escapeStr(prop.error || 'failed')}</span>`;
   } else {
@@ -578,9 +969,13 @@ async function renderManagerBulletsWithActions(briefContent, actions, proposalsB
   sections = foldUserIdeasIntoSections(sections, userIdeas);
 
   const blocks = [];
-  for (const s of sections) {
+  // Stash the section list on a global so the tab strip can be rendered
+  window._lastManagerSections = sections;
+  for (let si = 0; si < sections.length; si++) {
+    const s = sections[si];
     if (!s.bullets.length) continue;
-    blocks.push(`<h3>${renderInline(s.section)}</h3>`);
+    const sectionId = `s${si}`;
+    blocks.push(`<h3 data-section-id="${sectionId}">${renderInline(s.section)}</h3>`);
     for (const bulletObj of s.bullets) {
       const text = bulletObj.text;
       const isUserIdea = !!bulletObj._userIdea;
@@ -613,7 +1008,7 @@ async function renderManagerBulletsWithActions(briefContent, actions, proposalsB
         ? '<span class="user-idea-marker">your idea</span>'
         : '';
       blocks.push(`
-        <div class="mgr-bullet">
+        <div class="mgr-bullet" data-section-id="${sectionId}">
           <div class="mgr-bullet-text">${ideaTag}${renderInline(text)}</div>
           <div class="mgr-bullet-actions">
             <button class="mgr-action plan ${planClass}"
@@ -628,11 +1023,11 @@ async function renderManagerBulletsWithActions(briefContent, actions, proposalsB
                     data-bullet-hash="${escapeStr(h)}">Draft PoC ▾</button>
           </div>
         </div>
-        <div class="mgr-poc-picker" data-bullet-hash="${escapeStr(h)}">
+        <div class="mgr-poc-picker" data-bullet-hash="${escapeStr(h)}" data-section-id="${sectionId}">
           <span class="label">Pick a project:</span>
           ${pickerButtons}
         </div>
-        <div class="mgr-action-result-slot" data-bullet-hash="${escapeStr(h)}">
+        <div class="mgr-action-result-slot" data-bullet-hash="${escapeStr(h)}" data-section-id="${sectionId}">
           ${renderActionResult('plan', planRow)}
           ${renderActionResult('investigate', investigateRow)}
           ${pocResults}
@@ -860,6 +1255,14 @@ async function loadManagerBrief() {
     wireUpManagerActionButtons();
     wireUpDraftPocButtons();
     wireUpSubmitIdea();
+    wireUpMinimize();
+    renderTabs();
+    applyTabFilter();
+    injectResultHeaders();
+    applyCollapsedResults();
+    applyMinimizedState();
+    // Start (or restart) per-panel 1-second timers for any visible running rows
+    activateRunningTimers(document.getElementById('manager-brief'));
 
     // Detect any running tasks for adaptive polling
     let hasRunning = false;
@@ -972,13 +1375,14 @@ function wireUpDraftPocButtons() {
       const slot = document.querySelector(`.mgr-action-result-slot[data-bullet-hash="${h}"]`);
       if (slot) {
         const placeholder = document.createElement('div');
-        placeholder.className = 'mgr-poc-result running';
+        placeholder.className = 'mgr-poc-result running running-panel';
         placeholder.dataset.placeholderProject = projectId;
         placeholder.innerHTML = `
           <span class="mgr-poc-banner RUNNING">PoC · ${escapeStr(projectName)} · QUEUED</span>
-          <em>Worktree being created, agent dispatching…</em>
+          ${buildRunningHtml('draft-poc', new Date().toISOString(), `PoC for ${projectName}`)}
         `;
         slot.appendChild(placeholder);
+        activateRunningTimers(placeholder);
       }
       try {
         const r = await fetch(
@@ -1056,17 +1460,18 @@ function wireUpManagerActionButtons() {
       allBtns.forEach(b => b.disabled = true);
       const original = btn.textContent;
       btn.textContent = action === 'plan' ? 'Planning…' : 'Investigating…';
-      // Render a transient running state
+      // Render a transient running state with spinner + live timer
       if (slot) {
-        // Remove any prior output for this action
         slot.querySelectorAll('.mgr-action-output').forEach(el => {
           if (el.dataset.action === action) el.remove();
         });
         const placeholder = document.createElement('div');
-        placeholder.className = 'mgr-action-output expanded running';
+        placeholder.className = 'mgr-action-output expanded running running-panel';
         placeholder.dataset.action = action;
-        placeholder.innerHTML = `<em>${action === 'plan' ? 'Drafting an implementation plan' : 'Validating evidence'} (Sonnet, 30–90s typical)…</em>`;
+        const label = action === 'plan' ? 'Plan' : 'Investigate';
+        placeholder.innerHTML = buildRunningHtml(action, new Date().toISOString(), `${label} in progress`);
         slot.appendChild(placeholder);
+        activateRunningTimers(placeholder);
       }
       try {
         const res = await fetch(
