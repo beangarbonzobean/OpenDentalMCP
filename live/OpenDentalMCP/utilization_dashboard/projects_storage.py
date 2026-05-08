@@ -49,6 +49,22 @@ CREATE TABLE IF NOT EXISTS project_investigation (
 CREATE INDEX IF NOT EXISTS idx_pi_project_bullet
     ON project_investigation (project_id, bullet_hash, ts DESC);
 
+CREATE TABLE IF NOT EXISTS user_idea (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts              TEXT NOT NULL,
+    idea            TEXT NOT NULL,           -- raw user input
+    status          TEXT NOT NULL,           -- 'processing' | 'ok' | 'failed'
+    section         TEXT,                    -- which manager section
+    bullet          TEXT,                    -- Opus-produced polished bullet
+    bullet_hash     TEXT,                    -- sha1 of bullet text (for action keying)
+    model_used      TEXT,
+    provider_used   TEXT,
+    latency_ms      INTEGER,
+    cost_usd        REAL,
+    error           TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_user_idea_ts ON user_idea(ts DESC);
+
 CREATE TABLE IF NOT EXISTS manager_action (
     bullet_hash    TEXT NOT NULL,           -- sha1 of bullet text, 16 chars
     action         TEXT NOT NULL,           -- 'plan' | 'investigate' | ...
@@ -242,6 +258,53 @@ def investigations_for_project(project_id: str) -> dict[str, dict]:
                 pass
         out[d["bullet_hash"]] = d
     return out
+
+
+def write_user_idea(idea: str, *, status: str = "processing") -> int:
+    _init()
+    ts = _now_iso()
+    with _conn() as db:
+        cur = db.execute(
+            "INSERT INTO user_idea (ts, idea, status) VALUES (?, ?, ?)",
+            (ts, idea, status),
+        )
+        return cur.lastrowid
+
+
+def update_user_idea(
+    idea_id: int,
+    *,
+    status: str,
+    section: str = "",
+    bullet: str = "",
+    bullet_hash: str = "",
+    model_used: str = "",
+    provider_used: str = "",
+    latency_ms: int = 0,
+    cost_usd: float = 0.0,
+    error: str = "",
+) -> None:
+    _init()
+    with _conn() as db:
+        db.execute(
+            "UPDATE user_idea SET status=?, section=?, bullet=?, bullet_hash=?, "
+            " model_used=?, provider_used=?, latency_ms=?, cost_usd=?, error=? "
+            "WHERE id=?",
+            (status, section, bullet, bullet_hash, model_used, provider_used,
+             latency_ms, cost_usd, error, idea_id),
+        )
+
+
+def list_user_ideas(limit: int = 50) -> list[dict]:
+    """Return user-submitted ideas, newest first. Successful ones expose the
+    Opus-produced bullet and section so the UI can fold them into the brief."""
+    _init()
+    with _conn() as db:
+        rows = db.execute(
+            "SELECT * FROM user_idea ORDER BY ts DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def write_manager_action(

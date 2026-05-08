@@ -149,6 +149,96 @@ def api_manager_snapshot():
 MANAGER_OPUS_MODEL = os.environ.get("ROUTER_OPUS_MODEL", "claude-opus-4-1")
 
 
+def _run_user_idea_in_background(idea_id: int, idea: str) -> None:
+    """Background worker: bundle context, ask Opus to produce a polished
+    bullet from the user's idea, store it linked to the idea row."""
+    import hashlib
+    import re as _re
+
+    try:
+        prompt, _ = manager_bundler.build_user_idea_prompt(idea)
+    except Exception as e:
+        projects_storage.update_user_idea(
+            idea_id, status="failed",
+            error=f"bundle failed: {type(e).__name__}: {e}",
+        )
+        return
+
+    try:
+        from inference_router import Profile, dispatch
+    except ImportError:
+        projects_storage.update_user_idea(
+            idea_id, status="failed",
+            error="inference_router not installed",
+        )
+        return
+
+    try:
+        result = dispatch(
+            Profile(
+                fits_local=False,
+                prefers_high_end=True,
+                tag=f"user-idea:{idea_id}",
+                max_output_tokens=600,
+            ),
+            prompt,
+            max_tokens=600,
+            timeout=240,
+            model_hint=MANAGER_OPUS_MODEL,    # Opus for consistent voice
+        )
+    except Exception as e:
+        projects_storage.update_user_idea(
+            idea_id, status="failed",
+            error=f"dispatch failed: {type(e).__name__}: {e}",
+        )
+        return
+
+    # Parse the response: "### Section\n- bullet text"
+    text = (result.text or "").strip()
+    section_m = _re.match(r"^#{1,4}\s+(.+?)\n", text)
+    section = section_m.group(1).strip() if section_m else "User-submitted ideas"
+    bullet_m = _re.search(r"\n\s*[-*]\s+(.+)$", text, _re.DOTALL)
+    bullet = (bullet_m.group(1).strip() if bullet_m else text).strip()
+    if not bullet:
+        projects_storage.update_user_idea(
+            idea_id, status="failed",
+            error="no bullet produced", model_used=result.model,
+            provider_used=result.provider, latency_ms=result.latency_ms,
+            cost_usd=result.cost_usd,
+        )
+        return
+
+    bullet_hash = hashlib.sha1(bullet.encode("utf-8")).hexdigest()[:16]
+    projects_storage.update_user_idea(
+        idea_id, status="ok", section=section, bullet=bullet,
+        bullet_hash=bullet_hash,
+        model_used=result.model, provider_used=result.provider,
+        latency_ms=result.latency_ms, cost_usd=result.cost_usd,
+    )
+
+
+@utilization_bp.post("/api/manager/submit-idea")
+def api_submit_idea():
+    """Accept a free-form idea from the user, dispatch Opus to fold it into
+    the brief format, return immediately with the new idea's id. UI polls
+    /api/manager/actions for the bullet to appear."""
+    body = request.get_json(silent=True) or {}
+    idea = (body.get("idea") or "").strip()
+    if not idea:
+        return jsonify({"error": "missing 'idea' (non-empty string required)"}), 400
+    if len(idea) > 4000:
+        return jsonify({"error": "idea too long (max 4000 chars)"}), 400
+
+    idea_id = projects_storage.write_user_idea(idea)
+    async_runner.submit(_run_user_idea_in_background, idea_id, idea)
+    return jsonify({
+        "ok": True,
+        "queued": True,
+        "idea_id": idea_id,
+        "message": "Manager processing your idea — poll /api/manager/actions for the bullet.",
+    }), 202
+
+
 @utilization_bp.get("/api/manager/actions")
 def api_manager_actions():
     """Return all latest per-bullet actions + manager-originated proposals
@@ -169,6 +259,7 @@ def api_manager_actions():
         "actions": projects_storage.all_manager_actions(),
         "proposals": projects_storage.manager_proposals_by_bullet(),
         "registry": registry,
+        "user_ideas": projects_storage.list_user_ideas(limit=50),
     })
 
 

@@ -199,6 +199,61 @@ def build_action_prompt(action: str, bullet_text: str, section: str = "") -> tup
     return prompt, summary
 
 
+def build_user_idea_prompt(idea: str) -> tuple[str, ManagerBundleSummary]:
+    """Build a prompt that asks Opus to turn a free-form user idea into a
+    single polished bullet for the manager brief, with section assignment.
+    """
+    body, summary = build()
+    body = body.replace(_INSTRUCTIONS, "", 1)
+    prompt = (
+        _USER_IDEA_INSTRUCTIONS
+        + f"\nUser's idea (verbatim):\n  > {idea.strip()}\n\n"
+        + body
+    )
+    return prompt, summary
+
+
+_USER_IDEA_INSTRUCTIONS = """\
+The user has submitted an idea about the multi-project portfolio below.
+Your job is to turn that idea into ONE polished bullet for the manager
+brief, written in the same voice as the brief itself, with proper section
+assignment.
+
+Read the user's idea carefully. Read the project context. Then output
+EXACTLY this format (markdown, nothing else — no preamble, no closing):
+
+### <SECTION>
+- **<short title in bold>** — <one to three sentences expanding the idea
+  with concrete reference to which projects this affects, why it matters
+  given the current state, and what specifically should happen. If the
+  idea is already addressed by something visible in the context, say so
+  and cite it.>
+
+Where <SECTION> must be EXACTLY one of:
+  - Cross-project opportunities
+  - Patterns
+  - Strategic recommendations
+  - User-submitted ideas
+
+Choose the section that best fits:
+  - "Cross-project opportunities" if the idea connects two or more
+    projects or proposes integration between them
+  - "Patterns" if the idea is an observation about something repeated
+    across the portfolio
+  - "Strategic recommendations" if the idea is a new piece of work or
+    architectural move
+  - "User-submitted ideas" only if none of the above fit cleanly
+
+If the user's idea is unclear, off-topic for this portfolio, or already
+addressed by something in the context, still produce a bullet — but make
+the bullet's prose explicitly note that, e.g.: "**Already covered** —
+this overlaps with the existing 'Unify NSSM logs' opportunity above..."
+
+Do NOT produce more than one bullet. Do NOT add commentary outside the
+bullet. Output starts with "### " and ends with the bullet text.
+"""
+
+
 _ACTION_INSTRUCTIONS = {
     "plan": """\
 You are a software portfolio architect. The portfolio's manager just made a

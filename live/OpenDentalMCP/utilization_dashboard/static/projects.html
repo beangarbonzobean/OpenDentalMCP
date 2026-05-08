@@ -221,6 +221,69 @@ header .updated { color: var(--text-dim); font-size: 12px; margin-left: auto; }
   margin-left: 6px;
   letter-spacing: 0.04em;
 }
+.idea-box {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px dashed var(--panel-border);
+  border-radius: 6px;
+}
+.idea-box label {
+  display: block;
+  font-size: 11px;
+  color: var(--text-dim);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.idea-box textarea {
+  width: 100%;
+  min-height: 50px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 8px;
+  resize: vertical;
+}
+.idea-box textarea:focus { outline: none; border-color: var(--accent); }
+.idea-box .row { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; }
+.idea-box .hint { font-size: 11px; color: var(--text-dim); }
+.idea-box button.submit-idea {
+  background: var(--accent);
+  color: white;
+  border: none;
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.idea-box button.submit-idea:hover { background: #1f6feb; }
+.idea-box button.submit-idea:disabled { opacity: 0.5; cursor: wait; }
+.idea-pending {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: var(--panel);
+  border-left: 3px solid var(--warn);
+  border-radius: 0 4px 4px 0;
+  font-size: 12px;
+}
+.idea-pending.failed { border-left-color: var(--bad); }
+.idea-pending .raw { color: var(--text-dim); font-style: italic; font-size: 11px; }
+.user-idea-marker {
+  display: inline-block;
+  background: rgba(47, 129, 247, 0.15);
+  color: var(--accent);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  margin-right: 6px;
+  text-transform: uppercase;
+}
 
 .grid {
   display: grid;
@@ -316,6 +379,15 @@ button.refresh-ns:disabled { opacity: 0.5; cursor: wait; }
     <span>Manager's brief · portfolio view <span id="mgr-stale"></span></span>
     <button class="refresh-mgr" id="btn-refresh-mgr" type="button">Refresh</button>
   </h2>
+  <div class="idea-box">
+    <label for="idea-input">Submit an idea — manager will read context and add a bullet</label>
+    <textarea id="idea-input" placeholder="e.g. We should integrate Modento into the intake auto-filing pipeline so manual review queues stay synced." maxlength="4000"></textarea>
+    <div class="row">
+      <span class="hint">Opus will fit it into the right section, citing relevant projects.</span>
+      <button class="submit-idea" id="btn-submit-idea" type="button">Submit to manager</button>
+    </div>
+    <div id="idea-pending-list"></div>
+  </div>
   <div class="body" id="mgr-body"><em>No brief yet — click Refresh.</em></div>
   <div class="meta" id="mgr-meta"></div>
 </div>
@@ -465,16 +537,53 @@ function renderPocResult(projectId, projectName, prop) {
   `;
 }
 
-async function renderManagerBulletsWithActions(briefContent, actions, proposalsByBullet, registry) {
-  const sections = parseManagerBrief(briefContent);
-  if (!sections.length) {
+// Merge user-idea bullets (status='ok') into the parsed sections by name.
+function foldUserIdeasIntoSections(sections, userIdeas) {
+  const okIdeas = (userIdeas || []).filter(u => u.status === 'ok' && u.bullet);
+  if (!okIdeas.length) return sections;
+  const byName = new Map();
+  for (const s of sections) byName.set(s.section, s);
+  // Make sure all four canonical section headers exist in render order
+  const canonical = ['Cross-project opportunities', 'Patterns', 'Strategic recommendations', 'User-submitted ideas'];
+  const merged = [];
+  for (const name of canonical) {
+    if (byName.has(name)) merged.push(byName.get(name));
+    else merged.push({ section: name, bullets: [] });
+  }
+  // Append any unexpected sections from the original brief (e.g. Opus invented one)
+  for (const s of sections) {
+    if (!canonical.includes(s.section)) merged.push(s);
+  }
+  // Distribute user ideas into matching sections
+  for (const u of okIdeas) {
+    const target = merged.find(s => s.section === (u.section || 'User-submitted ideas'))
+                || merged.find(s => s.section === 'User-submitted ideas');
+    if (target) {
+      target.bullets.push({ text: u.bullet, _userIdea: u });
+    }
+  }
+  return merged;
+}
+
+async function renderManagerBulletsWithActions(briefContent, actions, proposalsByBullet, registry, userIdeas) {
+  let sections = parseManagerBrief(briefContent);
+  if (!sections.length && (!userIdeas || !userIdeas.some(u => u.status === 'ok'))) {
     return renderMarkdownRich(briefContent);
   }
+  // Convert string bullets to {text} objects so we can mark user ideas
+  sections = sections.map(s => ({
+    section: s.section,
+    bullets: s.bullets.map(b => typeof b === 'string' ? { text: b } : b),
+  }));
+  sections = foldUserIdeasIntoSections(sections, userIdeas);
+
   const blocks = [];
   for (const s of sections) {
-    blocks.push(`<h3>${renderInline(s.section)}</h3>`);
     if (!s.bullets.length) continue;
-    for (const text of s.bullets) {
+    blocks.push(`<h3>${renderInline(s.section)}</h3>`);
+    for (const bulletObj of s.bullets) {
+      const text = bulletObj.text;
+      const isUserIdea = !!bulletObj._userIdea;
       const h = await bulletHashSha1(text);
       const planRow = (actions[h] || {}).plan;
       const investigateRow = (actions[h] || {}).investigate;
@@ -500,9 +609,12 @@ async function renderManagerBulletsWithActions(briefContent, actions, proposalsB
         return renderPocResult(pid, projName, prop);
       }).join('');
 
+      const ideaTag = isUserIdea
+        ? '<span class="user-idea-marker">your idea</span>'
+        : '';
       blocks.push(`
         <div class="mgr-bullet">
-          <div class="mgr-bullet-text">${renderInline(text)}</div>
+          <div class="mgr-bullet-text">${ideaTag}${renderInline(text)}</div>
           <div class="mgr-bullet-actions">
             <button class="mgr-action plan ${planClass}"
                     data-bullet-hash="${escapeStr(h)}"
@@ -716,28 +828,38 @@ async function loadManagerBrief() {
     const actions = actionsRes.actions || {};
     const proposals = actionsRes.proposals || {};
     const registry = actionsRes.registry || [];
+    const userIdeas = actionsRes.user_ideas || [];
+
+    // Render the pending-ideas indicator (processing or failed)
+    renderPendingIdeas(userIdeas);
 
     const body = document.getElementById('mgr-body');
     const meta = document.getElementById('mgr-meta');
     const stale = document.getElementById('mgr-stale');
-    if (!brief) {
-      body.innerHTML = '<em>No brief yet — click Refresh to ask the manager agent for a portfolio review.</em>';
+    if (!brief && !userIdeas.some(u => u.status === 'ok')) {
+      body.innerHTML = '<em>No brief yet — click Refresh to ask the manager agent for a portfolio review, or submit an idea above.</em>';
       meta.textContent = '';
       stale.textContent = '';
-      _scheduleMgrPoll(false);
+      _scheduleMgrPoll(userIdeas.some(u => u.status === 'processing'));
       return;
     }
     body.innerHTML = await renderManagerBulletsWithActions(
-      brief.content || '', actions, proposals, registry,
+      (brief && brief.content) || '', actions, proposals, registry, userIdeas,
     );
-    meta.textContent =
-      `via ${brief.provider_used || ''} (${brief.model_used || ''}) · ${fmtAge(brief.ts)} · ` +
-      `${(brief.projects_in_bundle || []).length} projects · ${brief.bundle_chars || 0} chars in prompt`;
-    const ageHrs = brief.ts ? (Date.now() - new Date(brief.ts).getTime()) / 3600000 : 999;
-    stale.textContent = ageHrs > 6 ? 'STALE' : '';
+    if (brief) {
+      meta.textContent =
+        `via ${brief.provider_used || ''} (${brief.model_used || ''}) · ${fmtAge(brief.ts)} · ` +
+        `${(brief.projects_in_bundle || []).length} projects · ${brief.bundle_chars || 0} chars in prompt`;
+      const ageHrs = brief.ts ? (Date.now() - new Date(brief.ts).getTime()) / 3600000 : 999;
+      stale.textContent = ageHrs > 6 ? 'STALE' : '';
+    } else {
+      meta.textContent = 'No portfolio refresh yet (showing only user-submitted ideas).';
+      stale.textContent = '';
+    }
 
     wireUpManagerActionButtons();
     wireUpDraftPocButtons();
+    wireUpSubmitIdea();
 
     // Detect any running tasks for adaptive polling
     let hasRunning = false;
@@ -753,11 +875,74 @@ async function loadManagerBrief() {
         }
       }
     }
+    if (!hasRunning) {
+      hasRunning = userIdeas.some(u => u.status === 'processing');
+    }
     _scheduleMgrPoll(hasRunning);
   } catch (e) {
     document.getElementById('mgr-body').innerHTML = '<em>fetch error: ' + escapeStr(e.message) + '</em>';
     _scheduleMgrPoll(false);
   }
+}
+
+function renderPendingIdeas(userIdeas) {
+  const list = document.getElementById('idea-pending-list');
+  if (!list) return;
+  const interesting = (userIdeas || []).filter(u => u.status !== 'ok');
+  list.innerHTML = '';
+  for (const u of interesting) {
+    const div = document.createElement('div');
+    div.className = 'idea-pending' + (u.status === 'failed' ? ' failed' : '');
+    if (u.status === 'processing') {
+      div.innerHTML =
+        '<strong>Manager processing…</strong> ' +
+        `<span class="raw">${escapeStr((u.idea || '').slice(0, 200))}</span>`;
+    } else if (u.status === 'failed') {
+      div.innerHTML =
+        '<strong style="color:var(--bad);">Failed:</strong> ' +
+        escapeStr(u.error || 'unknown') +
+        ` <span class="raw">(${escapeStr((u.idea || '').slice(0, 100))}…)</span>`;
+    }
+    list.appendChild(div);
+  }
+}
+
+function wireUpSubmitIdea() {
+  const btn = document.getElementById('btn-submit-idea');
+  const input = document.getElementById('idea-input');
+  if (!btn || !input || btn.dataset.wired === '1') return;
+  btn.dataset.wired = '1';
+  btn.addEventListener('click', async () => {
+    const idea = (input.value || '').trim();
+    if (!idea) {
+      input.focus();
+      return;
+    }
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = 'Submitting…';
+    try {
+      const r = await fetch('/utilization/api/manager/submit-idea', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idea }),
+      });
+      const d = await r.json();
+      if (!r.ok && !d.queued) {
+        alert('Submission failed: ' + (d.error || r.status));
+      } else {
+        input.value = '';
+        // Quick refresh to show the processing indicator; adaptive polling
+        // takes over from there.
+        await loadManagerBrief();
+      }
+    } catch (e) {
+      alert('Submit error: ' + (e.message || e));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  });
 }
 
 function wireUpDraftPocButtons() {
