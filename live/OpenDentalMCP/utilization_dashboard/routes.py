@@ -30,6 +30,7 @@ from pathlib import Path
 from flask import Blueprint, abort, jsonify, request, send_from_directory
 
 from utilization_dashboard import (
+    async_runner,
     context_bundler,
     gpu_poller,
     manager_bundler,
@@ -150,9 +151,25 @@ MANAGER_OPUS_MODEL = os.environ.get("ROUTER_OPUS_MODEL", "claude-opus-4-1")
 
 @utilization_bp.get("/api/manager/actions")
 def api_manager_actions():
-    """Return all latest per-bullet actions so the UI can attach results
-    to the right bullets when re-rendering the brief."""
-    return jsonify({"actions": projects_storage.all_manager_actions()})
+    """Return all latest per-bullet actions + manager-originated proposals
+    so the UI can attach results to the right bullets when re-rendering the
+    brief.
+
+    Shape: {
+      "actions":   {bullet_hash: {action: row, ...}, ...},
+      "proposals": {bullet_hash: {project_id: row, ...}, ...},
+      "registry":  [{id, name, domain}, ...]    # for the project picker
+    }
+    """
+    registry = [
+        {"id": p.get("id"), "name": p.get("name"), "domain": p.get("domain", "")}
+        for p in projects_poller.load_registry()
+    ]
+    return jsonify({
+        "actions": projects_storage.all_manager_actions(),
+        "proposals": projects_storage.manager_proposals_by_bullet(),
+        "registry": registry,
+    })
 
 
 @utilization_bp.post("/api/manager/refresh")
@@ -205,6 +222,72 @@ def api_manager_refresh():
     })
 
 
+def _run_manager_action_in_background(
+    bullet_hash: str,
+    action: str,
+    bullet_text: str,
+    section: str,
+    running_ts: str,
+) -> None:
+    """Background worker that does the actual dispatch + status update."""
+    try:
+        prompt, _ = manager_bundler.build_action_prompt(
+            action, bullet_text, section=section,
+        )
+    except ValueError as e:
+        projects_storage.write_manager_action(
+            bullet_hash, action, bullet_text,
+            section=section, status="failed", error=str(e), ts=running_ts,
+        )
+        return
+
+    allowed_tools = ["Read", "Grep", "Glob"] if action == "investigate" else None
+    cwd = str(projects_poller._GIT_ROOT) if action == "investigate" else None
+
+    try:
+        from inference_router import Profile, dispatch
+    except ImportError:
+        projects_storage.write_manager_action(
+            bullet_hash, action, bullet_text,
+            section=section, status="failed",
+            error="inference_router not installed", ts=running_ts,
+        )
+        return
+
+    try:
+        result = dispatch(
+            Profile(
+                fits_local=False,
+                prefers_high_end=True,
+                tag=f"manager-action:{action}:{bullet_hash}",
+                max_output_tokens=1500,
+            ),
+            prompt,
+            max_tokens=1500,
+            timeout=240,
+            allowed_tools=allowed_tools,
+            cwd=cwd,
+        )
+    except Exception as e:
+        projects_storage.write_manager_action(
+            bullet_hash, action, bullet_text,
+            section=section, status="failed",
+            error=f"{type(e).__name__}: {e}", ts=running_ts,
+        )
+        return
+
+    projects_storage.write_manager_action(
+        bullet_hash, action, bullet_text,
+        section=section, status="ok",
+        content=result.text,
+        model_used=result.model,
+        provider_used=result.provider,
+        latency_ms=result.latency_ms,
+        cost_usd=result.cost_usd,
+        ts=running_ts,
+    )
+
+
 @utilization_bp.post("/api/manager/bullets/<bullet_hash>/<action>")
 def api_manager_bullet_action(bullet_hash: str, action: str):
     """Run a per-bullet manager action (plan / investigate) and return the
@@ -222,75 +305,188 @@ def api_manager_bullet_action(bullet_hash: str, action: str):
     if not bullet_text:
         return jsonify({"error": "missing 'bullet_text'"}), 400
 
-    # Mark running so a UI poll mid-flight can display "running…"
+    # Write 'running' row, then submit dispatch to a background thread
+    # and return immediately so the browser doesn't hang for 30-90s.
     running_ts = projects_storage.write_manager_action(
         bullet_hash, action, bullet_text,
         section=section, status="running",
     )
+    async_runner.submit(
+        _run_manager_action_in_background,
+        bullet_hash, action, bullet_text, section, running_ts,
+    )
+    return jsonify({
+        "ok": True,
+        "queued": True,
+        "ts": running_ts,
+        "bullet_hash": bullet_hash,
+        "action": action,
+        "message": f"{action} dispatched in background; poll /api/manager/actions",
+    }), 202
 
-    try:
-        prompt, _ = manager_bundler.build_action_prompt(
-            action, bullet_text, section=section,
-        )
-    except ValueError as e:
-        projects_storage.write_manager_action(
-            bullet_hash, action, bullet_text,
-            section=section, status="failed", error=str(e), ts=running_ts,
-        )
-        return jsonify({"error": str(e)}), 400
 
-    allowed_tools = ["Read", "Grep", "Glob"] if action == "investigate" else None
-    cwd = str(projects_poller._GIT_ROOT) if action == "investigate" else None
+def _run_draft_poc_in_background(
+    bullet_hash: str,
+    bullet_text: str,
+    project_id: str,
+    project: dict,
+    wt,
+    project_cwd: str,
+    running_ts: str,
+) -> None:
+    """Background worker for manager-originated Draft PoC.
 
+    Same agent setup as L2 proposal (Read/Grep/Glob/Write/Edit, write_scope
+    locked to worktree) but the prompt is framed around a manager bullet
+    + a single chosen project rather than a per-project tactical bullet.
+    """
     try:
         from inference_router import Profile, dispatch
     except ImportError:
-        return jsonify({"error": "inference_router not installed"}), 500
+        projects_storage.write_proposal(
+            project_id, bullet_hash, bullet_text,
+            mode="manager-l2", status="failed",
+            error="inference_router not installed",
+            worktree_path=str(wt.path), branch=wt.branch,
+            ts=None,  # new ts since the running row has the same key
+        )
+        worktree_manager.discard(wt)
+        return
+
+    bundle_prompt, _ = context_bundler.build(project)
+    poc_prompt = (
+        "You are drafting a proof-of-concept code change for ONE project, "
+        "targeting a specific RECOMMENDATION made at the portfolio level. "
+        "You are running inside an ISOLATED git worktree of the project's "
+        "repo, so your edits are safe — they will not touch main until "
+        "merged.\n\n"
+        f"Portfolio-level recommendation:\n  > {bullet_text}\n\n"
+        f"Target project for this PoC:\n  > {project.get('name')} ({project_id})\n\n"
+        "Make the smallest, most representative change that demonstrates "
+        "this recommendation in this ONE project. Other affected projects "
+        "are not your concern here — keep the change minimal and confined "
+        "to this project's repo.\n\n"
+        "After editing, output a markdown report with:\n"
+        "  ### Summary\n  - 1-3 bullets: what you changed and why this "
+        "demonstrates the recommendation\n"
+        "  ### Files modified\n  - relative path per file\n"
+        "  ### How this validates the manager's recommendation\n  - 1-2 "
+        "sentences linking the change back to the broader portfolio idea\n"
+        "  ### Confidence\n  - HIGH | MEDIUM | LOW with one line. Only "
+        "HIGH if the change is correct, complete, and a faithful "
+        "demonstration.\n\n"
+        "If no change makes sense for this project (the recommendation "
+        "doesn't actually apply here), output:\n"
+        "  ### Summary\n  - This project doesn't need the change because: <reason>\n"
+        "  ### Confidence\n  - HIGH (no-op)\n\n"
+        "--- BACKGROUND CONTEXT (this project) ---\n"
+        + bundle_prompt
+    )
 
     try:
         result = dispatch(
             Profile(
                 fits_local=False,
                 prefers_high_end=True,
-                tag=f"manager-action:{action}:{bullet_hash}",
-                max_output_tokens=1500,
+                tag=f"draft-poc:{project_id}:{bullet_hash}",
+                max_output_tokens=2000,
             ),
-            prompt,
-            max_tokens=1500,
-            timeout=240,
-            allowed_tools=allowed_tools,
-            cwd=cwd,
+            poc_prompt,
+            max_tokens=2000,
+            timeout=420,
+            allowed_tools=["Read", "Grep", "Glob", "Write", "Edit"],
+            cwd=project_cwd,
+            write_scope=str(wt.path),
         )
     except Exception as e:
-        log.exception("manager %s dispatch failed for %s: %s", action, bullet_hash, e)
-        projects_storage.write_manager_action(
-            bullet_hash, action, bullet_text,
-            section=section, status="failed",
-            error=f"{type(e).__name__}: {e}", ts=running_ts,
+        log.exception("draft-poc dispatch failed for %s: %s", project_id, e)
+        projects_storage.write_proposal(
+            project_id, bullet_hash, bullet_text,
+            mode="manager-l2", status="failed",
+            error=f"{type(e).__name__}: {e}",
+            worktree_path=str(wt.path), branch=wt.branch,
+            ts=None,
         )
-        return jsonify({"error": f"dispatch failed: {type(e).__name__}: {e}"}), 502
+        worktree_manager.discard(wt)
+        return
 
-    # Replace the running row with the final result (same ts).
-    projects_storage.write_manager_action(
-        bullet_hash, action, bullet_text,
-        section=section, status="ok",
-        content=result.text,
+    diff = worktree_manager.diff_against_base(wt)
+    files_changed = worktree_manager.files_changed(wt)
+
+    projects_storage.write_proposal(
+        project_id, bullet_hash, bullet_text,
+        mode="manager-l2", status="pending",
+        summary=result.text,
+        diff=diff,
+        files_changed=files_changed,
+        worktree_path=str(wt.path),
+        branch=wt.branch,
         model_used=result.model,
         provider_used=result.provider,
         latency_ms=result.latency_ms,
         cost_usd=result.cost_usd,
-        ts=running_ts,
+        ts=None,
     )
+
+
+@utilization_bp.post("/api/manager/bullets/<bullet_hash>/draft-poc/<project_id>")
+def api_manager_draft_poc(bullet_hash: str, project_id: str):
+    """Manager-originated L2 proposal: agent edits ONE project to demonstrate
+    a portfolio-level recommendation.
+
+    Body: {"bullet_text": "..."}
+    Returns 202 with a 'queued' result; UI polls /api/projects/<id>/detail
+    (proposal_for_project) to see the result. The proposal lands in the
+    same project_proposal table as per-project L2 proposals; users can
+    Apply/Discard from the project's detail page.
+    """
+    body = request.get_json(silent=True) or {}
+    bullet_text = (body.get("bullet_text") or "").strip()
+    if not bullet_text:
+        return jsonify({"error": "missing 'bullet_text'"}), 400
+
+    registry = projects_poller.load_registry()
+    project = next((p for p in registry if p.get("id") == project_id), None)
+    if not project:
+        return jsonify({"error": f"unknown project_id: {project_id}"}), 404
+
+    # Worktree setup is synchronous — fast (~1s). Failures here surface
+    # immediately to the UI rather than confusing the user later.
+    try:
+        wt = worktree_manager.create(project_id, bullet_hash)
+    except Exception as e:
+        log.exception("draft-poc worktree create failed: %s", e)
+        return jsonify({"error": f"worktree setup failed: {e}"}), 500
+
+    repo_subpath = project.get("repo_path", "")
+    project_cwd = (wt.path / repo_subpath).resolve() if repo_subpath else wt.path
+    if not project_cwd.exists():
+        worktree_manager.discard(wt)
+        return jsonify({
+            "error": f"project repo_path {repo_subpath!r} does not exist in worktree",
+        }), 500
+
+    # Write 'running' proposal row so UI can show "Drafting…"
+    running_ts = projects_storage.write_proposal(
+        project_id, bullet_hash, bullet_text,
+        mode="manager-l2", status="running",
+        worktree_path=str(wt.path), branch=wt.branch,
+    )
+    async_runner.submit(
+        _run_draft_poc_in_background,
+        bullet_hash, bullet_text, project_id, project, wt, str(project_cwd), running_ts,
+    )
+
     return jsonify({
         "ok": True,
+        "queued": True,
         "ts": running_ts,
+        "project_id": project_id,
         "bullet_hash": bullet_hash,
-        "action": action,
-        "content": result.text,
-        "provider": result.provider,
-        "model": result.model,
-        "latency_ms": result.latency_ms,
-    })
+        "worktree_path": str(wt.path),
+        "branch": wt.branch,
+        "message": "Draft PoC dispatched in background. Poll /api/projects/<id>/detail.",
+    }), 202
 
 
 @utilization_bp.get("/api/projects/<project_id>/detail")

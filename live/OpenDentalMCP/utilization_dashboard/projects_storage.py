@@ -284,6 +284,37 @@ def latest_manager_action(bullet_hash: str, action: str) -> Optional[dict]:
     return dict(row) if row else None
 
 
+def manager_proposals_by_bullet() -> dict:
+    """Return manager-originated L2 proposals grouped by bullet_hash.
+
+    Shape: {bullet_hash: {project_id: latest_proposal_row, ...}}
+    """
+    _init()
+    out: dict[str, dict[str, dict]] = {}
+    with _conn() as db:
+        rows = db.execute(
+            "SELECT pp.* FROM project_proposal pp "
+            "INNER JOIN ("
+            "  SELECT project_id, bullet_hash, MAX(ts) AS max_ts "
+            "  FROM project_proposal WHERE mode='manager-l2' "
+            "  GROUP BY project_id, bullet_hash"
+            ") latest "
+            "  ON pp.project_id=latest.project_id "
+            " AND pp.bullet_hash=latest.bullet_hash "
+            " AND pp.ts=latest.max_ts "
+            "WHERE pp.mode='manager-l2'"
+        ).fetchall()
+    for r in rows:
+        d = dict(r)
+        if d.get("files_changed"):
+            try:
+                d["files_changed"] = json.loads(d["files_changed"])
+            except json.JSONDecodeError:
+                pass
+        out.setdefault(d["bullet_hash"], {})[d["project_id"]] = d
+    return out
+
+
 def all_manager_actions() -> dict:
     """Return {bullet_hash: {action: latest_row}} for the manager UI."""
     _init()

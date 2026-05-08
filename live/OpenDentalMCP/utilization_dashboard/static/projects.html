@@ -89,6 +89,77 @@ header .updated { color: var(--text-dim); font-size: 12px; margin-left: auto; }
 .manager-brief button.mgr-action:hover { color: var(--text); border-color: var(--accent); }
 .manager-brief button.mgr-action:disabled { opacity: 0.5; cursor: wait; }
 .manager-brief button.mgr-action.has-result { color: var(--good); border-color: var(--good); }
+.manager-brief button.mgr-action.draft-poc { color: var(--warn); border-color: var(--warn); }
+.manager-brief button.mgr-action.draft-poc:hover { color: var(--bad); border-color: var(--bad); }
+.mgr-poc-picker {
+  display: none;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 8px 0 0 16px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  font-size: 11px;
+}
+.mgr-poc-picker.expanded { display: flex; }
+.mgr-poc-picker .label { color: var(--text-dim); margin-right: 4px; align-self: center; }
+.mgr-poc-picker button {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.mgr-poc-picker button:hover { border-color: var(--accent); }
+.mgr-poc-picker button:disabled { opacity: 0.5; cursor: wait; }
+.mgr-poc-result {
+  margin-top: 8px;
+  margin-left: 16px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border-left: 3px solid var(--warn);
+  border-radius: 0 6px 6px 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.mgr-poc-result.applied { border-left-color: var(--good); }
+.mgr-poc-result.discarded { border-left-color: var(--neutral); }
+.mgr-poc-result.failed { border-left-color: var(--bad); }
+.mgr-poc-result.running { border-left-color: var(--warn); }
+.mgr-poc-result h3, .mgr-poc-result h4 {
+  margin: 6px 0 4px;
+  font-size: 11px; font-weight: 600;
+  color: var(--text); text-transform: none; letter-spacing: 0;
+}
+.mgr-poc-result code { background: rgba(255,255,255,0.06); padding: 1px 4px; border-radius: 3px; font-size: 11px; }
+.mgr-poc-result .files { display: flex; flex-wrap: wrap; gap: 4px 8px; margin: 4px 0; font-size: 11px; }
+.mgr-poc-result .files code { background: rgba(255,255,255,0.06); }
+.mgr-poc-result pre.diff {
+  background: #0a0d12; border: 1px solid var(--panel-border);
+  border-radius: 4px; padding: 8px 10px; margin: 6px 0;
+  font: 11px/1.4 ui-monospace, monospace; color: var(--text-dim);
+  max-height: 280px; overflow: auto; white-space: pre;
+}
+.mgr-poc-result .added { color: var(--good); }
+.mgr-poc-result .removed { color: var(--bad); }
+.mgr-poc-result .header { color: var(--accent); }
+.mgr-poc-result .actions { display: flex; gap: 6px; margin-top: 8px; }
+.mgr-poc-result button.apply { color: var(--good); border-color: var(--good); }
+.mgr-poc-result button.discard { color: var(--bad); border-color: var(--bad); }
+.mgr-poc-meta { font-size: 10px; color: var(--text-dim); margin-top: 6px; }
+.mgr-poc-banner {
+  font-size: 10px; padding: 1px 6px; border-radius: 3px;
+  letter-spacing: 0.04em; margin-bottom: 6px; display: inline-block;
+}
+.mgr-poc-banner.PENDING  { background: rgba(210, 153, 34, 0.18); color: var(--warn); }
+.mgr-poc-banner.APPLIED  { background: rgba(46, 160, 67, 0.18); color: var(--good); }
+.mgr-poc-banner.DISCARDED{ background: rgba(110, 118, 129, 0.18); color: var(--neutral); }
+.mgr-poc-banner.RUNNING  { background: rgba(210, 153, 34, 0.18); color: var(--warn); }
+.mgr-poc-banner.FAILED   { background: rgba(248, 81, 73, 0.18); color: var(--bad); }
 .mgr-action-output {
   margin-top: 8px;
   margin-left: 16px;
@@ -345,7 +416,56 @@ function renderActionResult(action, row) {
   return `<div class="mgr-action-output expanded ${klass}">${body}${meta}</div>`;
 }
 
-async function renderManagerBulletsWithActions(briefContent, actions) {
+function renderDiff(diff) {
+  if (!diff) return '';
+  const lines = diff.split('\n').map(ln => {
+    if (ln.startsWith('+++') || ln.startsWith('---') || ln.startsWith('diff '))
+      return `<span class="header">${escapeStr(ln)}</span>`;
+    if (ln.startsWith('+')) return `<span class="added">${escapeStr(ln)}</span>`;
+    if (ln.startsWith('-')) return `<span class="removed">${escapeStr(ln)}</span>`;
+    return escapeStr(ln);
+  });
+  return `<pre class="diff">${lines.join('\n')}</pre>`;
+}
+
+function renderPocResult(projectId, projectName, prop) {
+  if (!prop) return '';
+  const status = (prop.status || 'pending').toUpperCase();
+  const klass = (prop.status || '').toLowerCase();
+  let body = '';
+  if (prop.status === 'running') {
+    body = '<em>Drafting PoC (Sonnet, 1-3 min typical)…</em>';
+  } else if (prop.status === 'failed') {
+    body = `<span style="color:var(--bad);">${escapeStr(prop.error || 'failed')}</span>`;
+  } else {
+    body = renderMarkdownRich(prop.summary || '');
+    if (prop.files_changed && prop.files_changed.length) {
+      body += '<div class="files">' +
+        prop.files_changed.map(f => '<code>' + escapeStr(f) + '</code>').join('') +
+        '</div>';
+    }
+    body += renderDiff(prop.diff);
+    if (prop.status === 'pending') {
+      body += `<div class="actions">
+        <button class="bullet-btn apply" data-action="apply"
+                data-project-id="${escapeStr(projectId)}"
+                data-bullet-hash="${escapeStr(prop.bullet_hash)}">Apply to main</button>
+        <button class="bullet-btn discard" data-action="discard"
+                data-project-id="${escapeStr(projectId)}"
+                data-bullet-hash="${escapeStr(prop.bullet_hash)}">Discard</button>
+      </div>`;
+    }
+  }
+  return `
+    <div class="mgr-poc-result ${klass}">
+      <span class="mgr-poc-banner ${status}">PoC · ${escapeStr(projectName)} · ${status}</span>
+      ${body}
+      <div class="mgr-poc-meta">via ${escapeStr(prop.provider_used || '')} (${escapeStr(prop.model_used || '')}) · ${fmtAge(prop.ts)}</div>
+    </div>
+  `;
+}
+
+async function renderManagerBulletsWithActions(briefContent, actions, proposalsByBullet, registry) {
   const sections = parseManagerBrief(briefContent);
   if (!sections.length) {
     return renderMarkdownRich(briefContent);
@@ -360,6 +480,26 @@ async function renderManagerBulletsWithActions(briefContent, actions) {
       const investigateRow = (actions[h] || {}).investigate;
       const planClass = planRow && planRow.status === 'ok' ? 'has-result' : '';
       const invClass = investigateRow && investigateRow.status === 'ok' ? 'has-result' : '';
+      const props = proposalsByBullet[h] || {};
+      const hasPoc = Object.keys(props).length > 0;
+      const pocClass = hasPoc ? 'has-result' : '';
+
+      // Build the per-project picker buttons
+      const pickerButtons = (registry || []).map(p =>
+        `<button class="poc-pick"
+                 data-project-id="${escapeStr(p.id)}"
+                 data-project-name="${escapeStr(p.name)}"
+                 data-bullet-hash="${escapeStr(h)}"
+                 data-bullet-text="${encodeURIComponent(text)}">${escapeStr(p.name)}</button>`
+      ).join('');
+
+      // Render existing PoC results for this bullet
+      const pocResults = Object.entries(props).map(([pid, prop]) => {
+        const proj = (registry || []).find(p => p.id === pid);
+        const projName = proj ? proj.name : pid;
+        return renderPocResult(pid, projName, prop);
+      }).join('');
+
       blocks.push(`
         <div class="mgr-bullet">
           <div class="mgr-bullet-text">${renderInline(text)}</div>
@@ -372,11 +512,18 @@ async function renderManagerBulletsWithActions(briefContent, actions) {
                     data-bullet-hash="${escapeStr(h)}"
                     data-bullet-text="${encodeURIComponent(text)}"
                     data-section="${escapeStr(s.section)}">Investigate</button>
+            <button class="mgr-action draft-poc ${pocClass}"
+                    data-bullet-hash="${escapeStr(h)}">Draft PoC ▾</button>
           </div>
+        </div>
+        <div class="mgr-poc-picker" data-bullet-hash="${escapeStr(h)}">
+          <span class="label">Pick a project:</span>
+          ${pickerButtons}
         </div>
         <div class="mgr-action-result-slot" data-bullet-hash="${escapeStr(h)}">
           ${renderActionResult('plan', planRow)}
           ${renderActionResult('investigate', investigateRow)}
+          ${pocResults}
         </div>
       `);
     }
@@ -550,7 +697,15 @@ async function refresh() {
   }
 }
 
-// Manager's brief — render existing + wire up refresh
+// Manager's brief — render existing + wire up refresh + adaptive polling
+let _mgrPollTimer = null;
+function _scheduleMgrPoll(hasRunning) {
+  if (_mgrPollTimer) clearTimeout(_mgrPollTimer);
+  // Faster poll while any task is in flight, slower otherwise
+  const ms = hasRunning ? 4000 : 60000;
+  _mgrPollTimer = setTimeout(loadManagerBrief, ms);
+}
+
 async function loadManagerBrief() {
   try {
     const [snapRes, actionsRes] = await Promise.all([
@@ -559,6 +714,9 @@ async function loadManagerBrief() {
     ]);
     const brief = snapRes.brief;
     const actions = actionsRes.actions || {};
+    const proposals = actionsRes.proposals || {};
+    const registry = actionsRes.registry || [];
+
     const body = document.getElementById('mgr-body');
     const meta = document.getElementById('mgr-meta');
     const stale = document.getElementById('mgr-stale');
@@ -566,18 +724,136 @@ async function loadManagerBrief() {
       body.innerHTML = '<em>No brief yet — click Refresh to ask the manager agent for a portfolio review.</em>';
       meta.textContent = '';
       stale.textContent = '';
+      _scheduleMgrPoll(false);
       return;
     }
-    body.innerHTML = await renderManagerBulletsWithActions(brief.content || '', actions);
+    body.innerHTML = await renderManagerBulletsWithActions(
+      brief.content || '', actions, proposals, registry,
+    );
     meta.textContent =
       `via ${brief.provider_used || ''} (${brief.model_used || ''}) · ${fmtAge(brief.ts)} · ` +
       `${(brief.projects_in_bundle || []).length} projects · ${brief.bundle_chars || 0} chars in prompt`;
     const ageHrs = brief.ts ? (Date.now() - new Date(brief.ts).getTime()) / 3600000 : 999;
     stale.textContent = ageHrs > 6 ? 'STALE' : '';
+
     wireUpManagerActionButtons();
+    wireUpDraftPocButtons();
+
+    // Detect any running tasks for adaptive polling
+    let hasRunning = false;
+    for (const byAction of Object.values(actions)) {
+      for (const row of Object.values(byAction)) {
+        if (row && row.status === 'running') { hasRunning = true; break; }
+      }
+    }
+    if (!hasRunning) {
+      for (const byProj of Object.values(proposals)) {
+        for (const row of Object.values(byProj)) {
+          if (row && row.status === 'running') { hasRunning = true; break; }
+        }
+      }
+    }
+    _scheduleMgrPoll(hasRunning);
   } catch (e) {
     document.getElementById('mgr-body').innerHTML = '<em>fetch error: ' + escapeStr(e.message) + '</em>';
+    _scheduleMgrPoll(false);
   }
+}
+
+function wireUpDraftPocButtons() {
+  // Toggle the picker open/close
+  document.querySelectorAll('.manager-brief button.draft-poc').forEach(btn => {
+    if (btn.dataset.wired === '1') return;
+    btn.dataset.wired = '1';
+    btn.addEventListener('click', () => {
+      const h = btn.dataset.bulletHash;
+      const picker = document.querySelector(`.mgr-poc-picker[data-bullet-hash="${h}"]`);
+      if (picker) picker.classList.toggle('expanded');
+    });
+  });
+
+  // Project picks → POST draft-poc
+  document.querySelectorAll('.mgr-poc-picker button.poc-pick').forEach(btn => {
+    if (btn.dataset.wired === '1') return;
+    btn.dataset.wired = '1';
+    btn.addEventListener('click', async () => {
+      const h = btn.dataset.bulletHash;
+      const text = decodeURIComponent(btn.dataset.bulletText);
+      const projectId = btn.dataset.projectId;
+      const projectName = btn.dataset.projectName;
+      btn.disabled = true;
+      const orig = btn.textContent;
+      btn.textContent = 'Queuing…';
+      const slot = document.querySelector(`.mgr-action-result-slot[data-bullet-hash="${h}"]`);
+      if (slot) {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'mgr-poc-result running';
+        placeholder.dataset.placeholderProject = projectId;
+        placeholder.innerHTML = `
+          <span class="mgr-poc-banner RUNNING">PoC · ${escapeStr(projectName)} · QUEUED</span>
+          <em>Worktree being created, agent dispatching…</em>
+        `;
+        slot.appendChild(placeholder);
+      }
+      try {
+        const r = await fetch(
+          `/utilization/api/manager/bullets/${encodeURIComponent(h)}/draft-poc/${encodeURIComponent(projectId)}`,
+          { method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ bullet_text: text }) }
+        );
+        const d = await r.json();
+        if (!r.ok && !d.queued) {
+          alert('Draft PoC failed: ' + (d.error || r.status));
+          if (slot) {
+            const ph = slot.querySelector(`[data-placeholder-project="${projectId}"]`);
+            if (ph) ph.remove();
+          }
+        } else {
+          // Trigger a quick refresh so the running row shows up; then
+          // _scheduleMgrPoll picks up the rest.
+          await loadManagerBrief();
+          // Close the picker
+          const picker = document.querySelector(`.mgr-poc-picker[data-bullet-hash="${h}"]`);
+          if (picker) picker.classList.remove('expanded');
+        }
+      } catch (e) {
+        alert('Draft PoC request failed: ' + (e.message || e));
+      } finally {
+        btn.disabled = false;
+        btn.textContent = orig;
+      }
+    });
+  });
+
+  // Apply / Discard inside PoC results — reuse the per-project endpoints
+  document.querySelectorAll('.mgr-poc-result button[data-action]').forEach(btn => {
+    if (btn.dataset.wired === '1') return;
+    btn.dataset.wired = '1';
+    btn.addEventListener('click', async () => {
+      const action = btn.dataset.action;
+      const projectId = btn.dataset.projectId;
+      const h = btn.dataset.bulletHash;
+      btn.disabled = true;
+      const orig = btn.textContent;
+      btn.textContent = action === 'apply' ? 'Applying…' : 'Discarding…';
+      try {
+        const r = await fetch(
+          `/utilization/api/projects/${encodeURIComponent(projectId)}/proposals/${encodeURIComponent(h)}/${action}`,
+          { method: 'POST' }
+        );
+        const d = await r.json();
+        if (!r.ok || d.error) {
+          alert(d.error || 'failed');
+          btn.disabled = false; btn.textContent = orig;
+        } else {
+          await loadManagerBrief();
+        }
+      } catch (e) {
+        alert(e.message || e);
+        btn.disabled = false; btn.textContent = orig;
+      }
+    });
+  });
 }
 
 function wireUpManagerActionButtons() {
@@ -677,7 +953,8 @@ if (mgrBtn) {
 loadManagerBrief();
 refresh();
 setInterval(refresh, 30000);
-setInterval(loadManagerBrief, 60000);
+// loadManagerBrief schedules its own next call adaptively (4s while
+// tasks running, 60s otherwise) — see _scheduleMgrPoll.
 </script>
 </body>
 </html>
