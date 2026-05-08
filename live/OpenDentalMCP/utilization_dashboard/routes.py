@@ -145,9 +145,21 @@ def api_manager_snapshot():
     return jsonify({"brief": projects_storage.latest_manager_brief()})
 
 
+MANAGER_OPUS_MODEL = os.environ.get("ROUTER_OPUS_MODEL", "claude-opus-4-1")
+
+
+@utilization_bp.get("/api/manager/actions")
+def api_manager_actions():
+    """Return all latest per-bullet actions so the UI can attach results
+    to the right bullets when re-rendering the brief."""
+    return jsonify({"actions": projects_storage.all_manager_actions()})
+
+
 @utilization_bp.post("/api/manager/refresh")
 def api_manager_refresh():
-    """Bundle all-project state and ask Sonnet to produce a portfolio brief."""
+    """Bundle all-project state and ask OPUS to produce a portfolio brief.
+    Opus is preferred over Sonnet for portfolio-level reasoning — slower
+    but considers the relationships between projects more carefully."""
     prompt, summary = manager_bundler.build()
 
     try:
@@ -159,13 +171,14 @@ def api_manager_refresh():
         result = dispatch(
             Profile(
                 fits_local=False,
-                prefers_high_end=True,         # nudge toward Sonnet
+                prefers_high_end=True,
                 tag="manager-brief",
-                max_output_tokens=1500,
+                max_output_tokens=2000,
             ),
             prompt,
-            max_tokens=1500,
-            timeout=240,
+            max_tokens=2000,
+            timeout=420,                      # Opus runs slower; allow more
+            model_hint=MANAGER_OPUS_MODEL,    # explicit Opus override
         )
     except Exception as e:
         log.exception("manager refresh dispatch failed: %s", e)
@@ -189,6 +202,94 @@ def api_manager_refresh():
         "latency_ms": result.latency_ms,
         "projects_in_bundle": summary.project_ids,
         "bundle_chars": summary.total_chars,
+    })
+
+
+@utilization_bp.post("/api/manager/bullets/<bullet_hash>/<action>")
+def api_manager_bullet_action(bullet_hash: str, action: str):
+    """Run a per-bullet manager action (plan / investigate) and return the
+    agent's report. Body: {"bullet_text": "...", "section": "..."}.
+
+    Both supported actions are read-only L1-style. They use Sonnet (cheaper
+    than Opus, fast enough for tactical drilldowns) and dispatch through
+    the inference router so the cost shows up in the dashboard.
+    """
+    if action not in ("plan", "investigate"):
+        return jsonify({"error": f"unknown action: {action}"}), 400
+    body = request.get_json(silent=True) or {}
+    bullet_text = (body.get("bullet_text") or "").strip()
+    section = (body.get("section") or "").strip()
+    if not bullet_text:
+        return jsonify({"error": "missing 'bullet_text'"}), 400
+
+    # Mark running so a UI poll mid-flight can display "running…"
+    running_ts = projects_storage.write_manager_action(
+        bullet_hash, action, bullet_text,
+        section=section, status="running",
+    )
+
+    try:
+        prompt, _ = manager_bundler.build_action_prompt(
+            action, bullet_text, section=section,
+        )
+    except ValueError as e:
+        projects_storage.write_manager_action(
+            bullet_hash, action, bullet_text,
+            section=section, status="failed", error=str(e), ts=running_ts,
+        )
+        return jsonify({"error": str(e)}), 400
+
+    allowed_tools = ["Read", "Grep", "Glob"] if action == "investigate" else None
+    cwd = str(projects_poller._GIT_ROOT) if action == "investigate" else None
+
+    try:
+        from inference_router import Profile, dispatch
+    except ImportError:
+        return jsonify({"error": "inference_router not installed"}), 500
+
+    try:
+        result = dispatch(
+            Profile(
+                fits_local=False,
+                prefers_high_end=True,
+                tag=f"manager-action:{action}:{bullet_hash}",
+                max_output_tokens=1500,
+            ),
+            prompt,
+            max_tokens=1500,
+            timeout=240,
+            allowed_tools=allowed_tools,
+            cwd=cwd,
+        )
+    except Exception as e:
+        log.exception("manager %s dispatch failed for %s: %s", action, bullet_hash, e)
+        projects_storage.write_manager_action(
+            bullet_hash, action, bullet_text,
+            section=section, status="failed",
+            error=f"{type(e).__name__}: {e}", ts=running_ts,
+        )
+        return jsonify({"error": f"dispatch failed: {type(e).__name__}: {e}"}), 502
+
+    # Replace the running row with the final result (same ts).
+    projects_storage.write_manager_action(
+        bullet_hash, action, bullet_text,
+        section=section, status="ok",
+        content=result.text,
+        model_used=result.model,
+        provider_used=result.provider,
+        latency_ms=result.latency_ms,
+        cost_usd=result.cost_usd,
+        ts=running_ts,
+    )
+    return jsonify({
+        "ok": True,
+        "ts": running_ts,
+        "bullet_hash": bullet_hash,
+        "action": action,
+        "content": result.text,
+        "provider": result.provider,
+        "model": result.model,
+        "latency_ms": result.latency_ms,
     })
 
 

@@ -47,6 +47,7 @@ def dispatch(
     allowed_tools: Optional[list[str]] = None,
     cwd: Optional[str] = None,
     write_scope: Optional[str] = None,
+    model_hint: Optional[str] = None,
 ) -> InferenceResult:
     """Route to a provider, call it, fall through on failure. Logs both
     decision and outcome to utilization.db.
@@ -55,6 +56,9 @@ def dispatch(
     """
     decision = route(profile)
     fallbacks = [decision.choice] + list(decision.fallback_chain)
+    # Caller can override the model hint to force a specific model
+    # (e.g. Opus for portfolio-level reasoning instead of Sonnet auto-hint)
+    effective_hint = model_hint if model_hint else decision.model_hint
 
     log_ts = log_store.log_decision(
         choice=decision.choice.value,
@@ -76,7 +80,7 @@ def dispatch(
             result = provider.call(
                 prompt,
                 images=images,
-                model_hint=decision.model_hint if idx == 0 else None,
+                model_hint=effective_hint if idx == 0 else None,
                 max_tokens=max_tokens,
                 timeout=timeout,
                 allowed_tools=allowed_tools,

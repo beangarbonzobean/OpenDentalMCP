@@ -175,6 +175,86 @@ def _memory_section(entry: dict) -> str:
     return "\n".join(chunks)
 
 
+def build_action_prompt(action: str, bullet_text: str, section: str = "") -> tuple[str, ManagerBundleSummary]:
+    """Build a prompt for one of the per-bullet manager actions.
+
+    `action` is one of:
+      - 'plan'         -> produce an implementation plan for this bullet
+      - 'investigate'  -> validate the manager's evidence for this bullet
+    """
+    body, summary = build()
+    # Strip the manager-level instructions block; we want the raw context only.
+    body = body.replace(_INSTRUCTIONS, "", 1)
+
+    instructions = _ACTION_INSTRUCTIONS.get(action)
+    if not instructions:
+        raise ValueError(f"unknown manager action: {action!r}")
+
+    section_hint = f"(from section: {section})" if section else ""
+    prompt = (
+        instructions
+        + f"\nThe specific bullet to act on {section_hint}:\n  > {bullet_text}\n\n"
+        + body
+    )
+    return prompt, summary
+
+
+_ACTION_INSTRUCTIONS = {
+    "plan": """\
+You are a software portfolio architect. The portfolio's manager just made a
+strategic recommendation about the multi-project codebase below. Your job is
+to turn that recommendation into a concrete implementation plan.
+
+Read all the project context, then produce a markdown plan in EXACTLY this
+shape (no preamble, no closing summary):
+
+### Affected projects
+- Bullet per project this touches, with one line on what changes there
+
+### Implementation steps
+- 3 to 7 sequential bullets. Each is a discrete chunk of work an engineer
+  could complete in a single sitting. Cite files / projects by name.
+
+### Acceptance criteria
+- 1 to 3 bullets describing exactly how we'd know the work is done
+
+### Risks
+- 1 to 2 bullets — what could go wrong, what to watch for
+
+### Effort
+- T-shirt size (S / M / L / XL) and rough hour estimate, with a one-line
+  justification
+
+If the recommendation is a no-op or already implemented, say so explicitly
+in a single sentence rather than inventing work.
+""",
+    "investigate": """\
+You are validating a manager's strategic recommendation against the actual
+state of the codebase. The manager's claim might be right, partly right, or
+based on stale data. Your job is to check the evidence.
+
+Use the read-only tools (Read, Grep, Glob) on the project context below to
+verify the specific facts the manager cited. Then write a short report:
+
+### Evidence found
+- 2 to 4 bullets of CONCRETE evidence (cite file paths, line numbers,
+  commits, log snippets) that either support or contradict the claim
+
+### Assessment
+- One bullet: SUPPORTED | PARTIALLY_SUPPORTED | CONTRADICTED | INSUFFICIENT_DATA
+  with one line of reasoning
+
+### Recommendation
+- If SUPPORTED: 1 to 2 next steps to act on it
+- If CONTRADICTED: explain what the actual situation is
+- If PARTIAL or INSUFFICIENT: what additional evidence would clarify
+
+Be concise. No preamble. Cite specific evidence — do not assert without
+naming files or commits.
+""",
+}
+
+
 _INSTRUCTIONS = """\
 You are a software portfolio manager reviewing six related software projects
 that all serve a single small business (a dental practice's MCP server fleet).

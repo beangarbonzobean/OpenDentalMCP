@@ -72,6 +72,52 @@ header .updated { color: var(--text-dim); font-size: 12px; margin-left: auto; }
 .manager-brief .body ul { padding-left: 20px; margin: 4px 0; }
 .manager-brief .body li { margin: 4px 0; }
 .manager-brief .body strong { font-weight: 600; }
+.manager-brief .mgr-bullet { display: flex; gap: 10px; align-items: flex-start; margin: 6px 0; }
+.manager-brief .mgr-bullet-text { flex: 1; }
+.manager-brief .mgr-bullet-actions { display: flex; gap: 4px; flex-shrink: 0; flex-wrap: nowrap; }
+.manager-brief button.mgr-action {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.manager-brief button.mgr-action:hover { color: var(--text); border-color: var(--accent); }
+.manager-brief button.mgr-action:disabled { opacity: 0.5; cursor: wait; }
+.manager-brief button.mgr-action.has-result { color: var(--good); border-color: var(--good); }
+.mgr-action-output {
+  margin-top: 8px;
+  margin-left: 16px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 6px 6px 0;
+  font-size: 12px;
+  line-height: 1.5;
+  display: none;
+}
+.mgr-action-output.expanded { display: block; }
+.mgr-action-output.failed { border-left-color: var(--bad); }
+.mgr-action-output.running { border-left-color: var(--warn); }
+.mgr-action-output h3, .mgr-action-output h4 {
+  margin: 6px 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  text-transform: none; letter-spacing: 0;
+}
+.mgr-action-output ul { padding-left: 18px; margin: 2px 0 6px; }
+.mgr-action-output li { margin: 2px 0; }
+.mgr-action-output code {
+  background: rgba(255,255,255,0.06);
+  padding: 1px 4px; border-radius: 3px;
+  font-size: 11px;
+}
+.mgr-action-meta { font-size: 10px; color: var(--text-dim); margin-top: 6px; }
 .manager-brief .body code {
   background: rgba(255,255,255,0.06);
   padding: 1px 5px; border-radius: 3px;
@@ -244,6 +290,100 @@ function renderMarkdownRich(md) {
   return out.join('');
 }
 
+// Parse the manager brief into a structured form: array of
+// {section: "Cross-project opportunities", bullets: [text, text, ...]}
+function parseManagerBrief(md) {
+  if (!md) return [];
+  const sections = [];
+  let current = null;
+  let buf = '';
+  const pushBuf = () => {
+    if (buf.trim() && current) current.bullets.push(buf.trim());
+    buf = '';
+  };
+  for (const raw of md.split('\n')) {
+    const ln = raw.trimEnd();
+    let m;
+    if ((m = ln.match(/^#{2,4}\s+(.+)$/))) {
+      pushBuf();
+      current = { section: m[1].trim(), bullets: [] };
+      sections.push(current);
+    } else if (/^\s*[-*]\s+/.test(ln)) {
+      pushBuf();
+      buf = ln.replace(/^\s*[-*]\s+/, '');
+    } else if (ln.trim() === '') {
+      pushBuf();
+    } else if (current) {
+      buf += '\n' + ln;
+    }
+  }
+  pushBuf();
+  return sections;
+}
+
+async function bulletHashSha1(text) {
+  const bytes = new TextEncoder().encode(text);
+  const hash = await crypto.subtle.digest('SHA-1', bytes);
+  return Array.from(new Uint8Array(hash))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('').slice(0, 16);
+}
+
+function renderActionResult(action, row) {
+  if (!row) return '';
+  const klass = row.status === 'ok' ? '' :
+                row.status === 'running' ? 'running' :
+                row.status === 'failed' ? 'failed' : '';
+  const body = row.status === 'running'
+    ? '<em>Running…</em>'
+    : row.status === 'failed'
+      ? '<span style="color:var(--bad);">' + escapeStr(row.error || 'failed') + '</span>'
+      : renderMarkdownRich(row.content || '');
+  const meta = row.status === 'ok'
+    ? `<div class="mgr-action-meta">${escapeStr(action)} · via ${escapeStr(row.provider_used || '')} (${escapeStr(row.model_used || '')}) · ${fmtAge(row.ts)}</div>`
+    : '';
+  return `<div class="mgr-action-output expanded ${klass}">${body}${meta}</div>`;
+}
+
+async function renderManagerBulletsWithActions(briefContent, actions) {
+  const sections = parseManagerBrief(briefContent);
+  if (!sections.length) {
+    return renderMarkdownRich(briefContent);
+  }
+  const blocks = [];
+  for (const s of sections) {
+    blocks.push(`<h3>${renderInline(s.section)}</h3>`);
+    if (!s.bullets.length) continue;
+    for (const text of s.bullets) {
+      const h = await bulletHashSha1(text);
+      const planRow = (actions[h] || {}).plan;
+      const investigateRow = (actions[h] || {}).investigate;
+      const planClass = planRow && planRow.status === 'ok' ? 'has-result' : '';
+      const invClass = investigateRow && investigateRow.status === 'ok' ? 'has-result' : '';
+      blocks.push(`
+        <div class="mgr-bullet">
+          <div class="mgr-bullet-text">${renderInline(text)}</div>
+          <div class="mgr-bullet-actions">
+            <button class="mgr-action plan ${planClass}"
+                    data-bullet-hash="${escapeStr(h)}"
+                    data-bullet-text="${encodeURIComponent(text)}"
+                    data-section="${escapeStr(s.section)}">Plan it</button>
+            <button class="mgr-action investigate ${invClass}"
+                    data-bullet-hash="${escapeStr(h)}"
+                    data-bullet-text="${encodeURIComponent(text)}"
+                    data-section="${escapeStr(s.section)}">Investigate</button>
+          </div>
+        </div>
+        <div class="mgr-action-result-slot" data-bullet-hash="${escapeStr(h)}">
+          ${renderActionResult('plan', planRow)}
+          ${renderActionResult('investigate', investigateRow)}
+        </div>
+      `);
+    }
+  }
+  return blocks.join('\n');
+}
+
 function fmtAge(iso) {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -413,9 +553,12 @@ async function refresh() {
 // Manager's brief — render existing + wire up refresh
 async function loadManagerBrief() {
   try {
-    const r = await fetch('/utilization/api/manager/snapshot', { cache: 'no-store' });
-    const d = await r.json();
-    const brief = d.brief;
+    const [snapRes, actionsRes] = await Promise.all([
+      fetch('/utilization/api/manager/snapshot', { cache: 'no-store' }).then(r => r.json()),
+      fetch('/utilization/api/manager/actions', { cache: 'no-store' }).then(r => r.json()),
+    ]);
+    const brief = snapRes.brief;
+    const actions = actionsRes.actions || {};
     const body = document.getElementById('mgr-body');
     const meta = document.getElementById('mgr-meta');
     const stale = document.getElementById('mgr-stale');
@@ -425,16 +568,86 @@ async function loadManagerBrief() {
       stale.textContent = '';
       return;
     }
-    body.innerHTML = renderMarkdownRich(brief.content || '');
+    body.innerHTML = await renderManagerBulletsWithActions(brief.content || '', actions);
     meta.textContent =
       `via ${brief.provider_used || ''} (${brief.model_used || ''}) · ${fmtAge(brief.ts)} · ` +
       `${(brief.projects_in_bundle || []).length} projects · ${brief.bundle_chars || 0} chars in prompt`;
-    // Stale > 6h
     const ageHrs = brief.ts ? (Date.now() - new Date(brief.ts).getTime()) / 3600000 : 999;
     stale.textContent = ageHrs > 6 ? 'STALE' : '';
+    wireUpManagerActionButtons();
   } catch (e) {
     document.getElementById('mgr-body').innerHTML = '<em>fetch error: ' + escapeStr(e.message) + '</em>';
   }
+}
+
+function wireUpManagerActionButtons() {
+  document.querySelectorAll('.manager-brief button.mgr-action').forEach(btn => {
+    if (btn.dataset.wired === '1') return;
+    btn.dataset.wired = '1';
+    btn.addEventListener('click', async () => {
+      const action = btn.classList.contains('plan') ? 'plan' : 'investigate';
+      const h = btn.dataset.bulletHash;
+      const text = decodeURIComponent(btn.dataset.bulletText);
+      const section = btn.dataset.section || '';
+      // Find the result slot for this bullet, append a running placeholder
+      const slot = document.querySelector(`.mgr-action-result-slot[data-bullet-hash="${h}"]`);
+      const allBtns = document.querySelectorAll(`.manager-brief button.mgr-action[data-bullet-hash="${h}"]`);
+      allBtns.forEach(b => b.disabled = true);
+      const original = btn.textContent;
+      btn.textContent = action === 'plan' ? 'Planning…' : 'Investigating…';
+      // Render a transient running state
+      if (slot) {
+        // Remove any prior output for this action
+        slot.querySelectorAll('.mgr-action-output').forEach(el => {
+          if (el.dataset.action === action) el.remove();
+        });
+        const placeholder = document.createElement('div');
+        placeholder.className = 'mgr-action-output expanded running';
+        placeholder.dataset.action = action;
+        placeholder.innerHTML = `<em>${action === 'plan' ? 'Drafting an implementation plan' : 'Validating evidence'} (Sonnet, 30–90s typical)…</em>`;
+        slot.appendChild(placeholder);
+      }
+      try {
+        const res = await fetch(
+          `/utilization/api/manager/bullets/${encodeURIComponent(h)}/${action}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ bullet_text: text, section }),
+          }
+        );
+        const d = await res.json();
+        if (slot) {
+          slot.querySelectorAll('.mgr-action-output').forEach(el => {
+            if (el.dataset.action === action) el.remove();
+          });
+          const out = document.createElement('div');
+          out.dataset.action = action;
+          if (!res.ok || d.error) {
+            out.className = 'mgr-action-output expanded failed';
+            out.innerHTML = '<span style="color:var(--bad);">' + escapeStr(d.error || 'failed') + '</span>';
+          } else {
+            out.className = 'mgr-action-output expanded';
+            out.innerHTML = renderMarkdownRich(d.content || '') +
+              `<div class="mgr-action-meta">${escapeStr(action)} · via ${escapeStr(d.provider || '')} (${escapeStr(d.model || '')}) · just now</div>`;
+            btn.classList.add('has-result');
+          }
+          slot.appendChild(out);
+        }
+      } catch (e) {
+        if (slot) {
+          const out = document.createElement('div');
+          out.className = 'mgr-action-output expanded failed';
+          out.dataset.action = action;
+          out.innerHTML = '<span style="color:var(--bad);">' + escapeStr(e.message || e) + '</span>';
+          slot.appendChild(out);
+        }
+      } finally {
+        allBtns.forEach(b => b.disabled = false);
+        btn.textContent = original;
+      }
+    });
+  });
 }
 
 const mgrBtn = document.getElementById('btn-refresh-mgr');

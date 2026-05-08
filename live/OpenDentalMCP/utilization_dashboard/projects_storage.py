@@ -49,6 +49,24 @@ CREATE TABLE IF NOT EXISTS project_investigation (
 CREATE INDEX IF NOT EXISTS idx_pi_project_bullet
     ON project_investigation (project_id, bullet_hash, ts DESC);
 
+CREATE TABLE IF NOT EXISTS manager_action (
+    bullet_hash    TEXT NOT NULL,           -- sha1 of bullet text, 16 chars
+    action         TEXT NOT NULL,           -- 'plan' | 'investigate' | ...
+    ts             TEXT NOT NULL,
+    bullet_text    TEXT NOT NULL,
+    section        TEXT,                    -- which manager section (opportunity/pattern/recommendation)
+    status         TEXT NOT NULL,           -- 'running' | 'ok' | 'failed'
+    content        TEXT,                    -- markdown report
+    model_used     TEXT,
+    provider_used  TEXT,
+    latency_ms     INTEGER,
+    cost_usd       REAL,
+    error          TEXT,
+    PRIMARY KEY (bullet_hash, action, ts)
+);
+CREATE INDEX IF NOT EXISTS idx_manager_action
+    ON manager_action (bullet_hash, action, ts DESC);
+
 CREATE TABLE IF NOT EXISTS manager_brief (
     ts                 TEXT PRIMARY KEY,
     content            TEXT NOT NULL,
@@ -223,6 +241,67 @@ def investigations_for_project(project_id: str) -> dict[str, dict]:
             except json.JSONDecodeError:
                 pass
         out[d["bullet_hash"]] = d
+    return out
+
+
+def write_manager_action(
+    bullet_hash: str,
+    action: str,
+    bullet_text: str,
+    *,
+    section: str = "",
+    status: str = "running",
+    content: str = "",
+    model_used: str = "",
+    provider_used: str = "",
+    latency_ms: int = 0,
+    cost_usd: float = 0.0,
+    error: str = "",
+    ts: Optional[str] = None,
+) -> str:
+    _init()
+    ts = ts or _now_iso()
+    with _conn() as db:
+        db.execute(
+            "INSERT OR REPLACE INTO manager_action "
+            "(bullet_hash, action, ts, bullet_text, section, status, content, "
+            " model_used, provider_used, latency_ms, cost_usd, error) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (bullet_hash, action, ts, bullet_text, section, status, content,
+             model_used, provider_used, latency_ms, cost_usd, error),
+        )
+    return ts
+
+
+def latest_manager_action(bullet_hash: str, action: str) -> Optional[dict]:
+    _init()
+    with _conn() as db:
+        row = db.execute(
+            "SELECT * FROM manager_action "
+            "WHERE bullet_hash=? AND action=? ORDER BY ts DESC LIMIT 1",
+            (bullet_hash, action),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def all_manager_actions() -> dict:
+    """Return {bullet_hash: {action: latest_row}} for the manager UI."""
+    _init()
+    out: dict[str, dict[str, dict]] = {}
+    with _conn() as db:
+        rows = db.execute(
+            "SELECT ma.* FROM manager_action ma "
+            "INNER JOIN ("
+            "  SELECT bullet_hash, action, MAX(ts) AS max_ts "
+            "  FROM manager_action GROUP BY bullet_hash, action"
+            ") latest "
+            "  ON ma.bullet_hash=latest.bullet_hash "
+            " AND ma.action=latest.action "
+            " AND ma.ts=latest.max_ts"
+        ).fetchall()
+    for r in rows:
+        d = dict(r)
+        out.setdefault(d["bullet_hash"], {})[d["action"]] = d
     return out
 
 
