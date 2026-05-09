@@ -26,6 +26,7 @@ import logging
 import os
 import re
 from pathlib import Path
+from typing import Optional
 
 from flask import Blueprint, abort, jsonify, request, send_from_directory
 
@@ -1046,8 +1047,9 @@ def api_propose(project_id: str):
         else:
             # Run the auto-ship verifier against the actual diff. The agent's
             # self-reported confidence is necessary but not sufficient — the
-            # verifier inspects what was actually changed.
-            v = verifier.verify(wt.path, files_changed)
+            # verifier inspects what was actually changed. V3 reads `project`
+            # for repo_path + the optional verify.v3_smoke service-smoke block.
+            v = verifier.verify(wt.path, files_changed, project=project)
             projects_storage.write_verification(
                 project_id, bullet_hash, ts,
                 tier=v.tier, status=v.status, summary=v.summary,

@@ -9,27 +9,49 @@ Tiers (highest tier triggered by any changed file wins):
     V1_SMOKE    docs / text only            secret regex + markdown sanity
     V2_UNIT     any *.py touched            py_compile + ruff (best-effort)
                                             + pytest near touched files
-    V3_SERVICE  routes / blueprint code     V2 + (TODO) start service in
-                                            worktree on free port, hit /healthz
+    V3_SERVICE  routes / blueprint code     V2 + real-import on each touched
+                                            module + (optional) start service
+                                            on free port, wait for ready, hit
+                                            health probes
     V4_UI       static html|css|js          V3 + (TODO) playwright render
     V5_SCHEMA   migrations / requirements   block auto-apply, force pending
 
 A verdict has a `status` of pass / fail / skip / block. Only `pass` lets L3
 auto-merge. `block` and `fail` leave the proposal pending. `skip` (e.g.
 deferred V4) is treated like pass for now — the operator decides.
+
+V3 service-smoke is opt-in per project. Add a `verify.v3_smoke` block in
+projects.yaml:
+
+  verify:
+    v3_smoke:
+      cwd: live/OpenDentalMCP             # relative to worktree root (optional;
+                                          #   defaults to project repo_path)
+      command: ["python", "-m", "utilization_dashboard.standalone",
+                "--port", "{port}", "--host", "127.0.0.1"]
+      ready_path: "/utilization/healthz"  # URL the verifier polls for 200
+      ready_timeout_s: 8                  # how long to wait for ready
+      probes:                             # additional GETs that must return 2xx
+        - "/utilization/projects/"
+        - "/utilization/api/projects/snapshot"
+
+When `v3_smoke` is missing the V3 runner still does its real-import check,
+just skips the service-spawn portion.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import re
+import socket
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 log = logging.getLogger(__name__)
 
@@ -169,14 +191,16 @@ def _py_compile(wt_path: Path, py_files: list[str]) -> tuple[list[str], list[str
 def _run_ruff(wt_path: Path, py_files: list[str]) -> tuple[str, list[str]]:
     """Best-effort ruff check. Returns (summary, issues_list).
 
-    Uses --select E,F so we only flag real errors and undefined names — not
-    style nits that would block ship for cosmetic reasons.
+    Uses --select F,E9 so we only flag real bugs (undefined names, unused
+    imports, syntax errors) and skip style rules like line length — those
+    fail ship for cosmetic reasons and break on existing files that have
+    long lines as a pre-existing condition.
     """
     abs_files = [str(wt_path / f) for f in py_files]
     try:
         res = subprocess.run(
             [sys.executable, "-m", "ruff", "check", "--quiet",
-             "--select", "E,F", "--no-cache"] + abs_files,
+             "--select", "F,E9", "--no-cache"] + abs_files,
             capture_output=True, text=True, timeout=30,
             encoding="utf-8", errors="replace",
         )
@@ -206,7 +230,8 @@ def _find_pytest_targets(wt_path: Path, py_files: list[str]) -> list[Path]:
         name = p.stem
         if name.startswith("test_"):
             if p.exists() and p not in seen:
-                out.append(p); seen.add(p)
+                out.append(p)
+                seen.add(p)
                 if len(out) >= 6:
                     break
             continue
@@ -217,7 +242,8 @@ def _find_pytest_targets(wt_path: Path, py_files: list[str]) -> list[Path]:
         ]
         for c in candidates:
             if c.exists() and c not in seen:
-                out.append(c); seen.add(c)
+                out.append(c)
+                seen.add(c)
                 break
         if len(out) >= 6:
             break
@@ -290,19 +316,267 @@ def _v2_unit(wt_path: Path, files: list[str]) -> Verification:
     )
 
 
-def _v3_service(wt_path: Path, files: list[str]) -> Verification:
-    """V3 adds an in-worktree service smoke. Not yet implemented — falls back
-    to V2 for now and records that V3 was deferred so the UI can show it."""
+def _free_port() -> int:
+    """Ask the OS for an unused TCP port. Best-effort; there's a TOCTOU window
+    between picking the port and the spawned service binding it, but for the
+    verifier we accept that — a flaky port pick just shows up as a smoke fail."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def _http_get(url: str, timeout: float = 2.0) -> tuple[Optional[int], str]:
+    """Return (status_code, body_or_error). status_code=None on transport error."""
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            body = r.read(4096).decode("utf-8", errors="replace")
+            return r.status, body
+    except urllib.error.HTTPError as e:
+        return e.code, str(e)[:200]
+    except Exception as e:  # noqa: BLE001 — connection refused, timeout, DNS, etc.
+        return None, f"{type(e).__name__}: {e}"[:200]
+
+
+def _module_name_for(rel_path: str, project_cwd_rel: Optional[str]) -> Optional[str]:
+    """Convert a worktree-relative .py path to a dotted import name relative to
+    the project's cwd. Returns None when the file is outside project_cwd or
+    can't be expressed as a clean module."""
+    p = rel_path.replace("\\", "/").lstrip("/")
+    if project_cwd_rel:
+        prefix = project_cwd_rel.replace("\\", "/").strip("/") + "/"
+        if not p.startswith(prefix):
+            return None
+        p = p[len(prefix):]
+    if not p.endswith(".py"):
+        return None
+    p = p[:-3]
+    if p.endswith("/__init__"):
+        p = p[: -len("/__init__")]
+    if not p:
+        return None
+    if "/" in p and any(seg.startswith(".") or "-" in seg for seg in p.split("/")):
+        return None  # not a clean dotted name
+    return p.replace("/", ".")
+
+
+def _real_imports(
+    wt_path: Path,
+    project_cwd: Path,
+    py_files: list[str],
+    project_cwd_rel: Optional[str],
+) -> tuple[list[str], list[str]]:
+    """Actually import each touched .py file with `python -c 'import X'` from
+    project_cwd. Catches NameError, missing deps, circular imports — things
+    py_compile (V2) doesn't catch.
+
+    Returns (ok_modules, fail_messages).
+    """
+    ok: list[str] = []
+    fails: list[str] = []
+    for rel in py_files:
+        mod = _module_name_for(rel, project_cwd_rel)
+        if not mod:
+            continue  # outside project_cwd or a non-package layout — skip
+        res = subprocess.run(
+            [sys.executable, "-c", f"import {mod}"],
+            cwd=project_cwd,
+            capture_output=True, text=True, timeout=30,
+            encoding="utf-8", errors="replace",
+        )
+        if res.returncode == 0:
+            ok.append(mod)
+        else:
+            err_lines = (res.stderr or res.stdout).strip().splitlines()
+            tail = " / ".join(err_lines[-3:])[:300] or "import failed"
+            fails.append(f"{mod}: {tail}")
+    return ok, fails
+
+
+def _run_service_smoke(
+    worktree_root: Path, smoke_cfg: dict, project_cwd: Path,
+) -> tuple[bool, str, dict]:
+    """Spawn the configured service on a free port, wait for ready, run probes,
+    kill it. Returns (passed, summary_str, evidence_dict)."""
+    cwd_rel = smoke_cfg.get("cwd")
+    cwd = (worktree_root / cwd_rel).resolve() if cwd_rel else project_cwd
+    if not cwd.exists():
+        return False, f"smoke cwd missing: {cwd}", {"cwd": str(cwd)}
+
+    raw_cmd = smoke_cfg.get("command") or []
+    if not raw_cmd:
+        return False, "smoke: no command configured", {}
+
+    port = _free_port()
+    cmd = [str(arg).replace("{port}", str(port)) for arg in raw_cmd]
+    # Substitute sys.executable for "python" so we use the same interpreter
+    # the dashboard runs under (avoids PATH-dependent surprises).
+    if cmd[0].lower() in {"python", "python.exe", "python3"}:
+        cmd[0] = sys.executable
+
+    ready_path = smoke_cfg.get("ready_path") or "/"
+    ready_timeout = float(smoke_cfg.get("ready_timeout_s", 8))
+    probes: list[str] = list(smoke_cfg.get("probes") or [ready_path])
+
+    # Spawn. Capture stdout+stderr so we can show the tail on failure.
+    try:
+        proc = subprocess.Popen(
+            cmd, cwd=cwd,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace",
+        )
+    except (FileNotFoundError, OSError) as e:
+        return False, f"spawn failed: {type(e).__name__}: {e}", {
+            "cmd": cmd, "cwd": str(cwd),
+        }
+
+    base = f"http://127.0.0.1:{port}"
+    evidence: dict[str, Any] = {
+        "port": port, "cmd": cmd, "cwd": str(cwd),
+        "ready_path": ready_path, "probes": [],
+    }
+    try:
+        # Poll for ready.
+        deadline = time.monotonic() + ready_timeout
+        ready = False
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                break  # subprocess exited before ready
+            code, _ = _http_get(base + ready_path, timeout=1.0)
+            if code and 200 <= code < 300:
+                ready = True
+                break
+            time.sleep(0.3)
+
+        if not ready:
+            tail = _read_proc_tail(proc, max_chars=800)
+            evidence["stdout_tail"] = tail
+            evidence["died_before_ready"] = proc.poll() is not None
+            return False, f"service not ready in {ready_timeout:.0f}s", evidence
+
+        # Run probes.
+        bad = 0
+        for probe in probes:
+            code, body = _http_get(base + probe, timeout=3.0)
+            evidence["probes"].append({"path": probe, "status": code,
+                                       "snippet": body[:120] if body else ""})
+            if not (code and 200 <= code < 300):
+                bad += 1
+
+        if bad:
+            return False, f"{bad}/{len(probes)} probe(s) failed", evidence
+        return True, f"{len(probes)} probe(s) passed", evidence
+    finally:
+        _terminate(proc)
+
+
+def _read_proc_tail(proc: subprocess.Popen, max_chars: int = 800) -> str:
+    """Read whatever stdout/stderr we have without blocking. Used on failure."""
+    try:
+        proc.terminate()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        out, _ = proc.communicate(timeout=2)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            out, _ = proc.communicate(timeout=2)
+        except Exception:  # noqa: BLE001
+            return "(could not capture output)"
+    except Exception:  # noqa: BLE001
+        return "(could not capture output)"
+    return (out or "")[-max_chars:]
+
+
+def _terminate(proc: subprocess.Popen) -> None:
+    """Best-effort terminate then kill. Safe to call multiple times."""
+    if proc.poll() is not None:
+        return
+    try:
+        proc.terminate()
+        proc.wait(timeout=3)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        proc.kill()
+        proc.wait(timeout=2)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _v3_service(
+    wt_path: Path, files: list[str], project: Optional[dict] = None,
+) -> Verification:
+    """V3 = V2 + real-import on each touched .py + optional service smoke.
+
+    The real-import step is the main upgrade over V2: py_compile only catches
+    syntax errors, while a real import catches NameError, missing deps, and
+    import-order bugs. Service smoke is the second upgrade and is gated on
+    a `verify.v3_smoke` block in projects.yaml — projects that don't define
+    one skip the spawn and rely on the import check alone.
+    """
+    py_files = [f for f in files if f.endswith(".py")]
+    issues: list[str] = []
+
+    # 1. Run V2 first — it's cheap and catches the obvious stuff.
     v2 = _v2_unit(wt_path, files)
+    if v2.status == "fail":
+        issues.extend(v2.evidence.get("issues", []))
+
+    # 2. Real-import check (this is the V3-specific upgrade over V2).
+    # The Python import root isn't necessarily `repo_path` — for the dashboard
+    # itself, repo_path points at the package dir but you have to import from
+    # the parent. Prefer `verify.v3_smoke.cwd` when set (that's the same dir
+    # the smoke spawn runs from, by construction the right Python root).
+    smoke_cfg = ((project or {}).get("verify") or {}).get("v3_smoke")
+    repo_path_rel = (project or {}).get("repo_path") or ""
+    import_root_rel = (smoke_cfg or {}).get("cwd") or repo_path_rel
+    project_cwd = (wt_path / import_root_rel).resolve() if import_root_rel else wt_path
+    imports_ok, imports_fail = _real_imports(
+        wt_path, project_cwd, py_files, import_root_rel,
+    )
+    issues.extend(f"real-import {m}" for m in imports_fail)
+
+    # 3. Optional service smoke.
+    smoke_summary = "smoke: not configured"
+    smoke_evidence: dict = {}
+    if smoke_cfg:
+        ok, smoke_summary, smoke_evidence = _run_service_smoke(
+            wt_path, smoke_cfg, project_cwd,
+        )
+        if not ok:
+            issues.append(f"service-smoke: {smoke_summary}")
+
+    status = "fail" if issues else "pass"
+    summary_parts = [
+        v2.summary.replace("V2 unit: ", "v2:"),
+        f"real-imports {len(imports_ok)}/{len(imports_ok) + len(imports_fail)}",
+        smoke_summary,
+    ]
+    summary = (
+        f"V3 service: {len(issues)} issue(s)"
+        if status == "fail"
+        else "V3 service: " + "; ".join(summary_parts)
+    )
     return Verification(
         tier=V3_SERVICE,
-        status=v2.status,
-        summary="V3 service (V2-only, service-start TODO): " + v2.summary,
+        status=status,
+        summary=summary,
         evidence={
+            "issues": issues[:30],
             "v2_inner": v2.evidence,
-            "todo": "Start service in worktree on free port + hit /healthz",
+            "real_imports_ok": imports_ok,
+            "real_imports_fail": imports_fail,
+            "smoke_summary": smoke_summary,
+            "smoke": smoke_evidence,
+            "project_id": (project or {}).get("id", ""),
         },
-        blocked_apply=v2.blocked_apply,
+        blocked_apply=bool(issues),
     )
 
 
@@ -338,17 +612,49 @@ def _v5_schema(wt_path: Path, files: list[str]) -> Verification:
     )
 
 
+# Tier runners are normalized to (wt_path, files, project) here so verify()
+# can dispatch uniformly. The simpler ones ignore `project`.
+
+def _v1_runner(wt_path, files, project):
+    return _v1_smoke(wt_path, files)
+
+
+def _v2_runner(wt_path, files, project):
+    return _v2_unit(wt_path, files)
+
+
+def _v3_runner(wt_path, files, project):
+    return _v3_service(wt_path, files, project)
+
+
+def _v4_runner(wt_path, files, project):
+    return _v4_ui(wt_path, files)
+
+
+def _v5_runner(wt_path, files, project):
+    return _v5_schema(wt_path, files)
+
+
 _RUNNERS = {
-    V1_SMOKE: _v1_smoke,
-    V2_UNIT: _v2_unit,
-    V3_SERVICE: _v3_service,
-    V4_UI: _v4_ui,
-    V5_SCHEMA: _v5_schema,
+    V1_SMOKE: _v1_runner,
+    V2_UNIT: _v2_runner,
+    V3_SERVICE: _v3_runner,
+    V4_UI: _v4_runner,
+    V5_SCHEMA: _v5_runner,
 }
 
 
-def verify(wt_path: Path, files_changed: list[str]) -> Verification:
+def verify(
+    wt_path: Path,
+    files_changed: list[str],
+    project: Optional[dict] = None,
+) -> Verification:
     """Public entry point: classify, run, time, and trap exceptions.
+
+    `project` is the projects.yaml entry for the project being verified.
+    V3 reads `project.repo_path` to know where the project's checkout sits
+    inside the worktree, and reads `project.verify.v3_smoke` (optional) to
+    drive the service smoke. Other tiers ignore it.
 
     A crash in the verifier is treated as `fail` so the L3 path falls back
     to manual review rather than shipping an unverified change.
@@ -357,7 +663,7 @@ def verify(wt_path: Path, files_changed: list[str]) -> Verification:
     runner = _RUNNERS[tier]
     t0 = time.monotonic()
     try:
-        v = runner(wt_path, files_changed)
+        v = runner(wt_path, files_changed, project)
     except Exception as e:
         log.exception("verifier %s crashed: %s", tier, e)
         v = Verification(
