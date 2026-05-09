@@ -1,0 +1,692 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project Detail</title>
+<style>
+:root {
+  --bg: #0e1116;
+  --panel: #161b22;
+  --panel-border: #30363d;
+  --text: #e6edf3;
+  --text-dim: #8b949e;
+  --accent: #2f81f7;
+  --good: #2ea043;
+  --warn: #d29922;
+  --bad: #f85149;
+  --neutral: #6e7681;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+
+header {
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--panel-border);
+  display: flex; align-items: baseline; gap: 16px;
+}
+header h1 { margin: 0; font-size: 16px; font-weight: 600; }
+header nav a { color: var(--text-dim); text-decoration: none; font-size: 13px; margin-right: 14px; }
+header nav a:hover { color: var(--text); }
+header nav a.active { color: var(--text); border-bottom: 2px solid var(--accent); padding-bottom: 2px; }
+header .breadcrumb { color: var(--text-dim); font-size: 12px; }
+header .breadcrumb a { color: var(--accent); text-decoration: none; }
+header .updated { color: var(--text-dim); font-size: 12px; margin-left: auto; }
+
+.container { padding: 18px 20px; max-width: 1200px; }
+
+.title-row { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+.title-row h2 { margin: 0; font-size: 22px; font-weight: 600; }
+.tag { font-size: 10px; padding: 1px 6px; border-radius: 3px;
+  background: rgba(255,255,255,0.06); color: var(--text-dim);
+  letter-spacing: 0.04em; }
+.tag.phase { background: rgba(47, 129, 247, 0.12); color: var(--accent); }
+.status-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
+.status-green { background: var(--good); }
+.status-yellow { background: var(--warn); }
+.status-red { background: var(--bad); }
+.status-unknown { background: var(--neutral); }
+.status-reason { color: var(--text-dim); font-size: 13px; margin-bottom: 14px; }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 16px 18px;
+  margin-bottom: 14px;
+}
+.panel h3 {
+  margin: 0 0 10px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  display: flex; justify-content: space-between; align-items: baseline;
+}
+
+.desc { font-size: 14px; line-height: 1.55; color: var(--text); white-space: pre-wrap; }
+
+.kv {
+  display: grid; grid-template-columns: 160px 1fr; gap: 6px 12px;
+  font-size: 13px; color: var(--text-dim);
+}
+.kv .v { color: var(--text); font-variant-numeric: tabular-nums; word-break: break-word; }
+
+.bullet-block { border-top: 1px solid var(--panel-border); padding: 12px 0 4px; }
+.bullet-block:first-child { border-top: none; padding-top: 0; }
+.bullet-row {
+  display: flex; gap: 12px; align-items: flex-start;
+  font-size: 13px; line-height: 1.5;
+}
+.bullet-text { flex: 1; }
+.bullet-text strong { font-weight: 600; }
+.bullet-actions { display: flex; gap: 4px; flex-shrink: 0; flex-wrap: nowrap; }
+button.bullet-btn {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+button.bullet-btn:hover { color: var(--text); border-color: var(--accent); }
+button.bullet-btn:disabled { opacity: 0.5; cursor: wait; }
+button.bullet-btn.has-result { color: var(--good); border-color: var(--good); }
+button.bullet-btn.l3 { color: var(--warn); border-color: var(--warn); opacity: 0.85; }
+button.bullet-btn.l3:hover { color: var(--bad); border-color: var(--bad); opacity: 1; }
+button.bullet-btn.l3:disabled { opacity: 0.4; }
+
+.investigation-output, .proposal-output {
+  margin-top: 10px;
+  margin-left: 18px;
+  padding: 12px 14px;
+  background: var(--bg);
+  border-radius: 0 6px 6px 0;
+  font-size: 13px; line-height: 1.5;
+  display: none;
+}
+.investigation-output { border-left: 3px solid var(--accent); }
+.proposal-output { border-left: 3px solid var(--warn); }
+.proposal-output.applied { border-left-color: var(--good); }
+.proposal-output.discarded { border-left-color: var(--neutral); }
+.proposal-output.failed { border-left-color: var(--bad); }
+.investigation-output.expanded, .proposal-output.expanded { display: block; }
+.proposal-output .actions { display: flex; gap: 8px; margin-top: 10px; }
+.proposal-output button.apply { color: var(--good); border-color: var(--good); }
+.proposal-output button.apply:hover { background: rgba(46, 160, 67, 0.1); }
+.proposal-output button.discard { color: var(--bad); border-color: var(--bad); }
+.proposal-output button.discard:hover { background: rgba(248, 81, 73, 0.1); }
+.proposal-output pre.diff {
+  background: #0a0d12;
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin: 8px 0;
+  font: 11px/1.4 ui-monospace, monospace;
+  color: var(--text-dim);
+  overflow: auto;
+  max-height: 320px;
+  white-space: pre;
+}
+.proposal-output pre.diff .added { color: var(--good); }
+.proposal-output pre.diff .removed { color: var(--bad); }
+.proposal-output pre.diff .header { color: var(--accent); }
+.proposal-output .files-changed {
+  display: flex; flex-wrap: wrap; gap: 4px 8px; margin: 4px 0;
+  font-size: 11px; color: var(--text-dim);
+}
+.proposal-output .files-changed code {
+  background: rgba(255,255,255,0.06);
+  padding: 1px 5px; border-radius: 3px;
+}
+.proposal-output .conf {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 6px; border-radius: 3px;
+  letter-spacing: 0.04em; margin-left: 6px;
+}
+.proposal-output .conf.HIGH { background: rgba(46, 160, 67, 0.18); color: var(--good); }
+.proposal-output .conf.MEDIUM { background: rgba(210, 153, 34, 0.18); color: var(--warn); }
+.proposal-output .conf.LOW { background: rgba(248, 81, 73, 0.18); color: var(--bad); }
+.investigation-output h3, .investigation-output h4 {
+  margin: 0 0 6px; font-size: 12px; font-weight: 600;
+  text-transform: none; letter-spacing: 0; color: var(--text);
+}
+.investigation-output ul { padding-left: 20px; margin: 4px 0 10px; }
+.investigation-output li { margin: 3px 0; }
+.investigation-output code {
+  background: rgba(255,255,255,0.06);
+  padding: 1px 5px; border-radius: 3px;
+  font-size: 12px;
+}
+.investigation-meta { font-size: 10px; color: var(--text-dim); margin-top: 8px; }
+
+.refresh-btn {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.refresh-btn:hover { color: var(--text); border-color: var(--accent); }
+.refresh-btn:disabled { opacity: 0.5; cursor: wait; }
+
+pre.log-tail {
+  background: var(--bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 10px;
+  font: 12px/1.4 ui-monospace, monospace;
+  color: var(--text-dim);
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.bullet-error { color: var(--bad); }
+.dim { color: var(--text-dim); }
+em { color: var(--text-dim); font-style: normal; }
+
+.verifier-row {
+  margin: 8px 0 6px 18px;
+  padding: 6px 10px;
+  border-left: 3px solid var(--neutral);
+  background: var(--bg);
+  border-radius: 0 4px 4px 0;
+  font-size: 12px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+}
+.verifier-row.ver-pass { border-left-color: var(--good); }
+.verifier-row.ver-fail { border-left-color: var(--bad); }
+.verifier-row.ver-block { border-left-color: var(--warn); }
+.verifier-row.ver-skip { border-left-color: var(--neutral); }
+
+.ver-pill {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  letter-spacing: 0.04em;
+  background: rgba(255,255,255,0.05);
+  color: var(--text-dim);
+  font-weight: 600;
+}
+.ver-pill.ver-pass { background: rgba(46, 160, 67, 0.18); color: var(--good); }
+.ver-pill.ver-fail { background: rgba(248, 81, 73, 0.18); color: var(--bad); }
+.ver-pill.ver-block { background: rgba(210, 153, 34, 0.18); color: var(--warn); }
+.ver-pill.ver-skip { background: rgba(110, 118, 129, 0.2); color: var(--text-dim); }
+
+.ver-summary { color: var(--text); flex: 1; min-width: 0; }
+.ver-meta { color: var(--text-dim); font-size: 10px; margin-left: auto; }
+.ver-blocked {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(210, 153, 34, 0.18);
+  color: var(--warn);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ver-issues {
+  flex-basis: 100%;
+  margin: 4px 0 0;
+  padding-left: 18px;
+  color: var(--bad);
+  font-size: 11px;
+  font-family: ui-monospace, monospace;
+}
+.ver-issues li { margin: 2px 0; }
+</style>
+</head>
+
+<body>
+<header>
+  <h1 id="title">Project Detail</h1>
+  <nav>
+    <a href="/utilization/">Utilization</a>
+    <a href="/utilization/projects/">Projects</a>
+  </nav>
+  <span class="breadcrumb" id="breadcrumb"></span>
+  <span class="updated" id="updated">—</span>
+</header>
+
+<div class="container" id="container">
+  <em>Loading…</em>
+</div>
+
+<script>
+function escape(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function fmtAge(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d)) return '—';
+  const ago = (Date.now() - d.getTime()) / 1000;
+  if (ago < 60) return Math.round(ago) + 's ago';
+  if (ago < 3600) return Math.round(ago / 60) + 'm ago';
+  if (ago < 86400) return Math.round(ago / 3600) + 'h ago';
+  return Math.round(ago / 86400) + 'd ago';
+}
+
+function statusClass(level) { return 'status-' + (level || 'unknown'); }
+
+// Parse the next-steps markdown into individual bullets so each can have
+// its own Investigate button.
+function parseBullets(md) {
+  if (!md) return [];
+  const out = [];
+  let buf = '';
+  for (const raw of md.split('\n')) {
+    const ln = raw.trimEnd();
+    const isBulletStart = /^\s*[-*]\s+/.test(ln);
+    if (isBulletStart) {
+      if (buf.trim()) out.push(buf.trim());
+      buf = ln.replace(/^\s*[-*]\s+/, '');
+    } else if (ln.trim() === '') {
+      if (buf.trim()) { out.push(buf.trim()); buf = ''; }
+    } else {
+      buf += '\n' + ln;
+    }
+  }
+  if (buf.trim()) out.push(buf.trim());
+  return out;
+}
+
+// Lightweight markdown for bullet text (bold, code).
+function renderInline(s) {
+  let out = escape(s);
+  out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  out = out.replace(/`([^`]+)`/g, '<code>$1</code>');
+  return out.replace(/\n/g, '<br>');
+}
+
+// Markdown renderer for investigation output (sections + bullets + inline code).
+function renderInvestigation(md) {
+  if (!md) return '<em>Empty response.</em>';
+  const lines = md.split('\n');
+  const out = [];
+  let inList = false;
+  const flushList = () => { if (inList) { out.push('</ul>'); inList = false; } };
+  for (const raw of lines) {
+    const ln = raw.trimEnd();
+    let m;
+    if ((m = ln.match(/^#{1,4}\s+(.+)$/))) {
+      flushList();
+      const level = (ln.match(/^#+/) || ['#'])[0].length;
+      const tag = level <= 2 ? 'h3' : 'h4';
+      out.push(`<${tag}>${renderInline(m[1])}</${tag}>`);
+    } else if (/^\s*[-*]\s+/.test(ln)) {
+      if (!inList) { out.push('<ul>'); inList = true; }
+      out.push('<li>' + renderInline(ln.replace(/^\s*[-*]\s+/, '')) + '</li>');
+    } else if (ln.trim() === '') {
+      flushList();
+    } else {
+      flushList();
+      out.push('<div>' + renderInline(ln) + '</div>');
+    }
+  }
+  flushList();
+  return out.join('');
+}
+
+function renderDiff(diff) {
+  if (!diff) return '<em class="dim">No diff captured.</em>';
+  const lines = diff.split('\n').map(ln => {
+    if (ln.startsWith('+++') || ln.startsWith('---') || ln.startsWith('diff ')) {
+      return `<span class="header">${escape(ln)}</span>`;
+    }
+    if (ln.startsWith('+')) return `<span class="added">${escape(ln)}</span>`;
+    if (ln.startsWith('-')) return `<span class="removed">${escape(ln)}</span>`;
+    return escape(ln);
+  });
+  return `<pre class="diff">${lines.join('\n')}</pre>`;
+}
+
+function renderVerificationBadge(v) {
+  if (!v) return '';
+  const status = v.status || 'unknown';
+  const tier = v.tier || '';
+  const ev = v.evidence || {};
+  const issues = ev.issues || [];
+  const blocked = !!v.blocked_apply;
+  const issuesHtml = issues.length
+    ? '<ul class="ver-issues">' +
+      issues.slice(0, 8).map(i => '<li>' + escape(i) + '</li>').join('') +
+      (issues.length > 8 ? `<li class="dim">…and ${issues.length - 8} more</li>` : '') +
+      '</ul>'
+    : '';
+  const filesHtml = (ev.py_files && ev.py_files.length)
+    ? '<div class="dim" style="margin-top:4px;font-size:10px;">checked: ' +
+      ev.py_files.slice(0, 6).map(f => '<code>' + escape(f) + '</code>').join(' ') +
+      (ev.py_files.length > 6 ? ` +${ev.py_files.length - 6}` : '') + '</div>'
+    : '';
+  const todo = ev.todo ? `<div class="dim" style="margin-top:4px;font-size:10px;">todo: ${escape(ev.todo)}</div>` : '';
+  const blockedTag = blocked ? '<span class="ver-blocked">blocked auto-apply</span>' : '';
+  return `
+    <div class="verifier-row ver-${escape(status)}" id="ver-${escape(v.bullet_hash || '')}">
+      <span class="ver-pill ver-${escape(status)}">${escape(tier.toUpperCase())} · ${escape(status.toUpperCase())}</span>
+      <span class="ver-summary">${escape(v.summary || '')}</span>
+      ${blockedTag}
+      <span class="ver-meta">${v.latency_ms != null ? Math.round(v.latency_ms) + 'ms · ' : ''}${fmtAge(v.ts)}</span>
+      ${issuesHtml}
+      ${filesHtml}
+      ${todo}
+    </div>
+  `;
+}
+
+function renderProposal(p, bulletHash) {
+  if (!p) return '';
+  const conf = (p.summary || '').match(/\b(HIGH|MEDIUM|LOW)\b/);
+  const confTag = conf ? `<span class="conf ${conf[1]}">${conf[1]}</span>` : '';
+  const filesHtml = (p.files_changed && p.files_changed.length)
+    ? '<div class="files-changed">' +
+      p.files_changed.map(f => '<code>' + escape(f) + '</code>').join('') +
+      '</div>'
+    : '<div class="dim" style="font-size:11px;">No files changed.</div>';
+  const actionsHtml = (p.status === 'pending')
+    ? `<div class="actions">
+         <button class="bullet-btn apply" data-action="apply" data-bullet-hash="${escape(bulletHash)}">Apply to main</button>
+         <button class="bullet-btn discard" data-action="discard" data-bullet-hash="${escape(bulletHash)}">Discard</button>
+       </div>`
+    : '';
+  const statusLabel = (p.status || 'pending').toUpperCase();
+  const errorHtml = p.error ? `<div class="bullet-error" style="margin-top:6px;font-size:12px;">${escape(p.error)}</div>` : '';
+  return `
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
+      <span style="font-weight:600;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-dim);">
+        ${escape((p.mode || '').toUpperCase() || 'PROPOSAL')} · ${escape(statusLabel)}${confTag}
+      </span>
+      <span style="font-size:10px;color:var(--text-dim);">${escape(p.provider_used || '')} (${escape(p.model_used || '')}) · ${fmtAge(p.ts)}</span>
+    </div>
+    ${renderInvestigation(p.summary || '')}
+    ${filesHtml}
+    ${renderDiff(p.diff)}
+    ${errorHtml}
+    ${actionsHtml}
+  `;
+}
+
+function bindProposalActions(panel) {
+  panel.querySelectorAll('button[data-action]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const action = btn.dataset.action;  // 'apply' | 'discard'
+      const h = btn.dataset.bulletHash;
+      btn.disabled = true;
+      const orig = btn.textContent;
+      btn.textContent = action === 'apply' ? 'Applying…' : 'Discarding…';
+      try {
+        const res = await fetch(
+          `/utilization/api/projects/${encodeURIComponent(projectId)}/proposals/${encodeURIComponent(h)}/${action}`,
+          { method: 'POST' }
+        );
+        const d = await res.json();
+        if (!res.ok || d.error) {
+          alert((d.error || 'failed') + '');
+          btn.disabled = false; btn.textContent = orig;
+          return;
+        }
+        // Reload the page to reflect new state
+        loadDetail();
+      } catch (e) {
+        alert(e.message || e);
+        btn.disabled = false; btn.textContent = orig;
+      }
+    });
+  });
+}
+
+// SHA-1 of a string, hex, first 16 chars — must match the server's hash.
+async function bulletHash(text) {
+  const bytes = new TextEncoder().encode(text);
+  const hash = await crypto.subtle.digest('SHA-1', bytes);
+  const bin = Array.from(new Uint8Array(hash));
+  return bin.map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
+}
+
+const projectId = decodeURIComponent(
+  (location.pathname.match(/\/projects\/([^/]+)\/?$/) || [])[1] || ''
+);
+
+async function loadDetail() {
+  const c = document.getElementById('container');
+  try {
+    const r = await fetch(`/utilization/api/projects/${encodeURIComponent(projectId)}/detail`,
+                         { cache: 'no-store' });
+    if (!r.ok) throw new Error('detail ' + r.status);
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+
+    const status = d.status || {};
+    const health = status.health || {};
+    const ns = d.next_steps;
+    const investigations = d.investigations || {};
+    const proposals = d.proposals || {};
+    const verifications = d.verifications || {};
+
+    document.getElementById('title').textContent = status.name || 'Project';
+    document.getElementById('breadcrumb').innerHTML =
+      `<a href="/utilization/projects/">All projects</a> · ${escape(status.domain || '')}`;
+    document.getElementById('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
+
+    const bullets = parseBullets(ns && ns.content);
+
+    const bulletsHtml = bullets.length
+      ? (await Promise.all(bullets.map(async (b) => {
+          const h = await bulletHash(b);
+          const inv = investigations[h];
+          const prop = proposals[h];
+          const ver = verifications[h];
+          const hasInv = !!inv;
+          const hasProp = !!prop;
+          const hasVer = !!ver;
+          return `
+            <div class="bullet-block">
+              <div class="bullet-row">
+                <div class="bullet-text">${renderInline(b)}</div>
+                <div class="bullet-actions">
+                  <button class="bullet-btn investigate ${hasInv ? 'has-result' : ''}"
+                          data-bullet-text="${encodeURIComponent(b)}"
+                          data-bullet-hash="${h}">
+                    ${hasInv ? '↻ Investigate' : 'Investigate'}
+                  </button>
+                  <button class="bullet-btn propose"
+                          data-bullet-text="${encodeURIComponent(b)}"
+                          data-bullet-hash="${h}">
+                    Propose (L2)
+                  </button>
+                  <button class="bullet-btn l3 autopilot"
+                          data-bullet-text="${encodeURIComponent(b)}"
+                          data-bullet-hash="${h}"
+                          title="Agent runs in worktree, auto-merges to main if confidence is HIGH and verifier passes">
+                    Auto-apply (L3)
+                  </button>
+                </div>
+              </div>
+              ${hasVer ? renderVerificationBadge(ver) : ''}
+              <div class="investigation-output ${hasInv ? 'expanded' : ''}" id="inv-${h}">
+                ${inv ? renderInvestigation(inv.content) : ''}
+                ${inv ? `<div class="investigation-meta">L1 · ${escape(inv.provider_used || '')} (${escape(inv.model_used || '')}) · ${fmtAge(inv.ts)} · tools: ${(inv.tools_used || []).join(', ')}</div>` : ''}
+              </div>
+              <div class="proposal-output ${hasProp ? 'expanded' : ''} ${hasProp ? escape(prop.status || '') : ''}" id="prop-${h}">
+                ${hasProp ? renderProposal(prop, h) : ''}
+              </div>
+            </div>`;
+        }))).join('')
+      : '<em>No next-steps generated yet. Refresh on the projects page.</em>';
+
+    c.innerHTML = `
+      <div class="title-row">
+        <span class="status-dot ${statusClass(status.overall)}"></span>
+        <h2>${escape(status.name)}</h2>
+        <span class="tag phase">${escape(status.phase || '')}</span>
+        <span class="tag">${escape(status.domain || '')}</span>
+      </div>
+      <div class="status-reason">${escape(status.overall_reason || '')}</div>
+
+      <div class="panel">
+        <h3>Description</h3>
+        <div class="desc">${escape(status.description || '')}</div>
+      </div>
+
+      <div class="panel">
+        <h3>Health signals</h3>
+        <div class="kv">
+          <div>service</div>             <div class="v">${escape(health.service || '—')} ${escape(health.service_status || '')}</div>
+          <div>last commit</div>         <div class="v">${health.last_commit_age_days != null ? health.last_commit_age_days.toFixed(1) + 'd' : '—'}${health.last_commit_subject ? ' — ' + escape(health.last_commit_subject) : ''}</div>
+          <div>log freshness</div>       <div class="v">${health.log_age_hours != null ? health.log_age_hours.toFixed(1) + 'h' : '—'} (stale&nbsp;after ${health.log_stale_after_hours}h)</div>
+          <div>log path</div>            <div class="v">${escape(health.log_path || '—')}</div>
+          <div>repo path</div>           <div class="v">${escape(status.repo_path)}</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>
+          <span>Next steps · click any bullet's "Investigate" to dig deeper</span>
+          <button class="refresh-btn" id="refresh-ns">Regenerate</button>
+        </h3>
+        ${bulletsHtml}
+        <div class="investigation-meta" id="ns-meta">
+          ${ns ? `generated ${fmtAge(ns.ts)} via ${escape(ns.provider_used || '')} (${escape(ns.model_used || '')})` : ''}
+        </div>
+      </div>
+    `;
+
+    // Wire up the bullet "Investigate" buttons
+    c.querySelectorAll('button.investigate').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const text = decodeURIComponent(btn.dataset.bulletText);
+        const h = btn.dataset.bulletHash;
+        const out = document.getElementById('inv-' + h);
+        const original = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = 'Running…';
+        out.classList.add('expanded');
+        out.innerHTML = '<em>Agent investigating (read-only: Read / Grep / Glob). 30–90s typical.</em>';
+        try {
+          const res = await fetch(
+            `/utilization/api/projects/${encodeURIComponent(projectId)}/investigate`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ bullet_text: text }),
+            }
+          );
+          const d = await res.json();
+          if (!res.ok || d.error) {
+            out.innerHTML = `<div class="bullet-error">${escape(d.error || 'failed')}</div>`;
+          } else {
+            out.innerHTML =
+              renderInvestigation(d.content) +
+              `<div class="investigation-meta">L1 · ${escape(d.provider || '')} (${escape(d.model || '')}) · just now · cwd: <code>${escape(d.cwd || '')}</code></div>`;
+            btn.classList.add('has-result');
+            btn.textContent = '↻ Investigate';
+          }
+        } catch (e) {
+          out.innerHTML = `<div class="bullet-error">${escape(e.message || e)}</div>`;
+        } finally {
+          btn.disabled = false;
+          if (!btn.classList.contains('has-result')) btn.textContent = original;
+        }
+      });
+    });
+
+    // Wire up Propose (L2) and Auto-apply (L3) buttons
+    function bindProposeButton(btn, mode) {
+      btn.addEventListener('click', async () => {
+        const text = decodeURIComponent(btn.dataset.bulletText);
+        const h = btn.dataset.bulletHash;
+        if (mode === 'l3') {
+          const ok = window.confirm(
+            'AUTO-APPLY (L3): the agent will run in an isolated git worktree, ' +
+            'edit files in this project, and AUTO-MERGE the result into main if it ' +
+            'reports HIGH confidence. Lower-confidence proposals stay pending for review.\n\n' +
+            'Continue?'
+          );
+          if (!ok) return;
+        }
+        const out = document.getElementById('prop-' + h);
+        const allBtns = c.querySelectorAll(`button[data-bullet-hash="${h}"]`);
+        allBtns.forEach(b => b.disabled = true);
+        const original = btn.textContent;
+        btn.textContent = mode === 'l3' ? 'Running L3…' : 'Drafting…';
+        out.classList.add('expanded');
+        out.classList.remove('applied', 'discarded', 'failed');
+        out.innerHTML = `<em>Agent ${mode === 'l3' ? 'editing + auto-applying' : 'drafting a change'} in an isolated worktree. 1-3 min typical.</em>`;
+        try {
+          const res = await fetch(
+            `/utilization/api/projects/${encodeURIComponent(projectId)}/propose`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ bullet_text: text, mode }),
+            }
+          );
+          const d = await res.json();
+          if (!res.ok || d.error) {
+            out.classList.add('failed');
+            out.innerHTML = `<div class="bullet-error">${escape(d.error || 'failed')}</div>`;
+          } else {
+            out.classList.add(d.status || 'pending');
+            out.innerHTML = renderProposal({
+              status: d.status,
+              summary: d.summary,
+              files_changed: d.files_changed,
+              diff: d.diff,
+              mode: d.mode,
+              ts: d.ts,
+              provider_used: d.provider,
+              model_used: d.model,
+              latency_ms: d.latency_ms,
+              error: d.apply_message && !d.auto_applied ? d.apply_message : '',
+            }, h);
+          }
+        } catch (e) {
+          out.classList.add('failed');
+          out.innerHTML = `<div class="bullet-error">${escape(e.message || e)}</div>`;
+        } finally {
+          allBtns.forEach(b => b.disabled = false);
+          btn.textContent = original;
+        }
+      });
+    }
+    c.querySelectorAll('button.propose').forEach(b => bindProposeButton(b, 'l2'));
+    c.querySelectorAll('button.autopilot').forEach(b => bindProposeButton(b, 'l3'));
+
+    // Wire up Apply / Discard buttons inside any rendered proposals
+    c.querySelectorAll('.proposal-output').forEach(panel => bindProposalActions(panel));
+
+    // Regenerate next-steps button
+    const regen = document.getElementById('refresh-ns');
+    if (regen) {
+      regen.addEventListener('click', async () => {
+        regen.disabled = true; const orig = regen.textContent;
+        regen.textContent = 'Generating…';
+        try {
+          const r = await fetch(
+            `/utilization/api/projects/${encodeURIComponent(projectId)}/refresh-next-steps`,
+            { method: 'POST' }
+          );
+          if (r.ok) await loadDetail();
+        } finally {
+          regen.disabled = false; regen.textContent = orig;
+        }
+      });
+    }
+  } catch (e) {
+    c.innerHTML = `<div class="bullet-error">Failed to load: ${escape(e.message || e)}</div>`;
+  }
+}
+
+loadDetail();
+</script>
+</body>
+</html>
