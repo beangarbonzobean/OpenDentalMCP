@@ -42,6 +42,16 @@ live/OpenDentalMCP/data/*.db-shm
 live/OpenDentalMCP/data/*.lock
 live/OpenDentalMCP/logs/
 
+# Utilization dashboard runtime state (DBs, logs)
+live/OpenDentalMCP/utilization_dashboard/data/
+live/OpenDentalMCP/utilization_dashboard/logs/
+
+# Pre-edit backup snapshots (kept on disk for rollback, not in git)
+**/*.bak.*
+
+# Claude Design handoff bundles (transient extract artifacts)
+.handoff/
+
 # pytest artifacts
 .pytest_cache/
 .coverage
