@@ -125,7 +125,8 @@ projects:
       diff (docs / Python / service / UI / schema). Currently:
         V1_SMOKE   secret regex + balanced markdown fences      (shipped)
         V2_UNIT    py_compile + ruff (E,F) + nearby pytest -x   (shipped)
-        V3_SERVICE V2 + start service in worktree on free port  (TODO)
+        V3_SERVICE V2 + real-import + spawn-and-probe on free   (shipped)
+                   port (opt-in via verify.v3_smoke)
         V4_UI      Playwright render + console-error scan       (TODO)
         V5_SCHEMA  always block, force manual review            (shipped)
       Verdict gates the existing HIGH-confidence check — both must agree
@@ -141,6 +142,20 @@ projects:
       - repo:routes.py
       - repo:projects_storage.py
       - repo:static/project_detail.html
+    verify:
+      # V3 service-smoke: spawn the dashboard standalone runner inside the
+      # proposal worktree on a free port, wait for /healthz to return 200,
+      # hit a couple of read-only endpoints, then kill the subprocess.
+      # Catches import/registration bugs that py_compile + ruff don't.
+      v3_smoke:
+        cwd: live/OpenDentalMCP
+        command: ["python", "-m", "utilization_dashboard.standalone",
+                  "--host", "127.0.0.1", "--port", "{port}"]
+        ready_path: /utilization/healthz
+        ready_timeout_s: 8
+        probes:
+          - /utilization/healthz
+          - /utilization/api/projects/snapshot
 
   - id: chart_audit_backlog
     name: Chart Audit Backlog Burndown
