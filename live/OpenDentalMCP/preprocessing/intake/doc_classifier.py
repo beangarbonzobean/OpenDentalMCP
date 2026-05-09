@@ -182,6 +182,36 @@ def _clamp_conf(v) -> float:
 
 
 def _default_caller(prompt: str, model: str, max_tokens: int) -> str:
+    """Real call via the inference router — drains pre-paid Max quota first
+    when there's headroom, falls through to Anthropic API when there isn't.
+    Tests inject their own caller and never hit this path.
+
+    The `model` argument is the legacy Haiku model name; it's used only as a
+    fallback hint if the router ends up at the API provider. The Max-via-SDK
+    path uses the user's Claude Code default model.
+    """
+    try:
+        from inference_router import Profile, dispatch
+    except ImportError:
+        # Router not on this deploy — fall back to the original Anthropic call
+        return _legacy_anthropic_caller(prompt, model, max_tokens)
+
+    result = dispatch(
+        Profile(
+            tag="intake-classify",
+            prefers_high_end=False,   # haiku-class quality is fine
+            max_output_tokens=max_tokens,
+        ),
+        prompt,
+        max_tokens=max_tokens,
+        timeout=60,
+    )
+    log.info("intake-classify routed to %s in %d ms (cost $%.4f)",
+             result.provider, result.latency_ms, result.cost_usd)
+    return result.text
+
+
+def _legacy_anthropic_caller(prompt: str, model: str, max_tokens: int) -> str:
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY not set")

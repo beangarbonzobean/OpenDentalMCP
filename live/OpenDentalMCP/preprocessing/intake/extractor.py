@@ -160,7 +160,31 @@ def extract_page(
 
 
 def _default_caller(prompt: str, model: str, max_tokens: int) -> str:
-    """Real Anthropic call. Tests inject their own caller."""
+    """Real call via the inference router — drains pre-paid Max quota first
+    when there's headroom, falls through to Anthropic API when there isn't.
+    Tests inject their own caller and never hit this path.
+    """
+    try:
+        from inference_router import Profile, dispatch
+    except ImportError:
+        return _legacy_anthropic_caller(prompt, model, max_tokens)
+
+    result = dispatch(
+        Profile(
+            tag="intake-extract",
+            prefers_high_end=False,
+            max_output_tokens=max_tokens,
+        ),
+        prompt,
+        max_tokens=max_tokens,
+        timeout=60,
+    )
+    log.info("intake-extract routed to %s in %d ms (cost $%.4f)",
+             result.provider, result.latency_ms, result.cost_usd)
+    return result.text
+
+
+def _legacy_anthropic_caller(prompt: str, model: str, max_tokens: int) -> str:
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY not set")
