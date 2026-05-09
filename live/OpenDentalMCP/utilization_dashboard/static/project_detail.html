@@ -193,6 +193,55 @@ pre.log-tail {
 .bullet-error { color: var(--bad); }
 .dim { color: var(--text-dim); }
 em { color: var(--text-dim); font-style: normal; }
+
+.verifier-row {
+  margin: 8px 0 6px 18px;
+  padding: 6px 10px;
+  border-left: 3px solid var(--neutral);
+  background: var(--bg);
+  border-radius: 0 4px 4px 0;
+  font-size: 12px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+}
+.verifier-row.ver-pass { border-left-color: var(--good); }
+.verifier-row.ver-fail { border-left-color: var(--bad); }
+.verifier-row.ver-block { border-left-color: var(--warn); }
+.verifier-row.ver-skip { border-left-color: var(--neutral); }
+
+.ver-pill {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  letter-spacing: 0.04em;
+  background: rgba(255,255,255,0.05);
+  color: var(--text-dim);
+  font-weight: 600;
+}
+.ver-pill.ver-pass { background: rgba(46, 160, 67, 0.18); color: var(--good); }
+.ver-pill.ver-fail { background: rgba(248, 81, 73, 0.18); color: var(--bad); }
+.ver-pill.ver-block { background: rgba(210, 153, 34, 0.18); color: var(--warn); }
+.ver-pill.ver-skip { background: rgba(110, 118, 129, 0.2); color: var(--text-dim); }
+
+.ver-summary { color: var(--text); flex: 1; min-width: 0; }
+.ver-meta { color: var(--text-dim); font-size: 10px; margin-left: auto; }
+.ver-blocked {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(210, 153, 34, 0.18);
+  color: var(--warn);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ver-issues {
+  flex-basis: 100%;
+  margin: 4px 0 0;
+  padding-left: 18px;
+  color: var(--bad);
+  font-size: 11px;
+  font-family: ui-monospace, monospace;
+}
+.ver-issues li { margin: 2px 0; }
 </style>
 </head>
 
@@ -301,6 +350,39 @@ function renderDiff(diff) {
   return `<pre class="diff">${lines.join('\n')}</pre>`;
 }
 
+function renderVerificationBadge(v) {
+  if (!v) return '';
+  const status = v.status || 'unknown';
+  const tier = v.tier || '';
+  const ev = v.evidence || {};
+  const issues = ev.issues || [];
+  const blocked = !!v.blocked_apply;
+  const issuesHtml = issues.length
+    ? '<ul class="ver-issues">' +
+      issues.slice(0, 8).map(i => '<li>' + escape(i) + '</li>').join('') +
+      (issues.length > 8 ? `<li class="dim">…and ${issues.length - 8} more</li>` : '') +
+      '</ul>'
+    : '';
+  const filesHtml = (ev.py_files && ev.py_files.length)
+    ? '<div class="dim" style="margin-top:4px;font-size:10px;">checked: ' +
+      ev.py_files.slice(0, 6).map(f => '<code>' + escape(f) + '</code>').join(' ') +
+      (ev.py_files.length > 6 ? ` +${ev.py_files.length - 6}` : '') + '</div>'
+    : '';
+  const todo = ev.todo ? `<div class="dim" style="margin-top:4px;font-size:10px;">todo: ${escape(ev.todo)}</div>` : '';
+  const blockedTag = blocked ? '<span class="ver-blocked">blocked auto-apply</span>' : '';
+  return `
+    <div class="verifier-row ver-${escape(status)}" id="ver-${escape(v.bullet_hash || '')}">
+      <span class="ver-pill ver-${escape(status)}">${escape(tier.toUpperCase())} · ${escape(status.toUpperCase())}</span>
+      <span class="ver-summary">${escape(v.summary || '')}</span>
+      ${blockedTag}
+      <span class="ver-meta">${v.latency_ms != null ? Math.round(v.latency_ms) + 'ms · ' : ''}${fmtAge(v.ts)}</span>
+      ${issuesHtml}
+      ${filesHtml}
+      ${todo}
+    </div>
+  `;
+}
+
 function renderProposal(p, bulletHash) {
   if (!p) return '';
   const conf = (p.summary || '').match(/\b(HIGH|MEDIUM|LOW)\b/);
@@ -388,6 +470,7 @@ async function loadDetail() {
     const ns = d.next_steps;
     const investigations = d.investigations || {};
     const proposals = d.proposals || {};
+    const verifications = d.verifications || {};
 
     document.getElementById('title').textContent = status.name || 'Project';
     document.getElementById('breadcrumb').innerHTML =
@@ -401,8 +484,10 @@ async function loadDetail() {
           const h = await bulletHash(b);
           const inv = investigations[h];
           const prop = proposals[h];
+          const ver = verifications[h];
           const hasInv = !!inv;
           const hasProp = !!prop;
+          const hasVer = !!ver;
           return `
             <div class="bullet-block">
               <div class="bullet-row">
@@ -421,11 +506,12 @@ async function loadDetail() {
                   <button class="bullet-btn l3 autopilot"
                           data-bullet-text="${encodeURIComponent(b)}"
                           data-bullet-hash="${h}"
-                          title="Agent runs in worktree, auto-merges to main if confidence is HIGH">
+                          title="Agent runs in worktree, auto-merges to main if confidence is HIGH and verifier passes">
                     Auto-apply (L3)
                   </button>
                 </div>
               </div>
+              ${hasVer ? renderVerificationBadge(ver) : ''}
               <div class="investigation-output ${hasInv ? 'expanded' : ''}" id="inv-${h}">
                 ${inv ? renderInvestigation(inv.content) : ''}
                 ${inv ? `<div class="investigation-meta">L1 · ${escape(inv.provider_used || '')} (${escape(inv.model_used || '')}) · ${fmtAge(inv.ts)} · tools: ${(inv.tools_used || []).join(', ')}</div>` : ''}

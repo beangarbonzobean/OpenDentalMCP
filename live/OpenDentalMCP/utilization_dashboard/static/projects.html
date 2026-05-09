@@ -251,6 +251,13 @@ header .updated { color: var(--text-dim); font-size: 12px; margin-left: auto; }
 .idea-box textarea:focus { outline: none; border-color: var(--accent); }
 .idea-box .row { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; }
 .idea-box .hint { font-size: 11px; color: var(--text-dim); }
+.idea-box .hint.warn { color: var(--bad); }
+@keyframes shake-x {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-4px); }
+  40%, 80% { transform: translateX(4px); }
+}
+.idea-box textarea.shake { animation: shake-x 0.32s ease-in-out; border-color: var(--bad); }
 .idea-box button.submit-idea {
   background: var(--accent);
   color: white;
@@ -262,7 +269,8 @@ header .updated { color: var(--text-dim); font-size: 12px; margin-left: auto; }
   cursor: pointer;
 }
 .idea-box button.submit-idea:hover { background: #1f6feb; }
-.idea-box button.submit-idea:disabled { opacity: 0.5; cursor: wait; }
+.idea-box button.submit-idea:disabled { opacity: 0.5; cursor: not-allowed; }
+.idea-box button.submit-idea.is-busy:disabled { cursor: wait; }
 .idea-pending {
   margin-top: 8px;
   padding: 8px 10px;
@@ -361,6 +369,188 @@ header .updated { color: var(--text-dim); font-size: 12px; margin-left: auto; }
   line-height: 1;
 }
 .manager-brief button.icon-btn:hover { color: var(--text); border-color: var(--accent); }
+.manager-brief select.model-select {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.manager-brief select.model-select:hover,
+.manager-brief select.model-select:focus { color: var(--text); border-color: var(--accent); outline: none; }
+.manager-brief select.model-select.overridden { color: var(--accent); border-color: var(--accent); }
+.manager-brief .model-select-label {
+  font-size: 11px; color: var(--text-dim); letter-spacing: 0.04em;
+  text-transform: uppercase; margin-right: 2px; cursor: help;
+}
+.manager-brief .session-cost {
+  font-size: 11px; color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  margin: 0 8px 0 4px; cursor: help; min-width: 60px; text-align: right;
+}
+.manager-brief .session-cost.spending { color: var(--warn); }
+.manager-brief .session-cost.warn { color: var(--bad); }
+
+/* Failed-idea dismiss × */
+.idea-pending {
+  position: relative;
+  padding-right: 32px;
+}
+.idea-pending button.dismiss-idea {
+  position: absolute; top: 6px; right: 6px;
+  width: 18px; height: 18px; border-radius: 3px;
+  background: transparent; border: 1px solid var(--panel-border);
+  color: var(--text-dim); font: inherit; font-size: 11px;
+  line-height: 1; cursor: pointer; padding: 0;
+}
+.idea-pending button.dismiss-idea:hover { color: var(--bad); border-color: var(--bad); }
+
+/* Fleet health pill row */
+.fleet-health {
+  margin: 0 0 12px;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 12px;
+}
+.fleet-health .pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px; border-radius: 999px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--panel-border);
+  cursor: pointer; user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+.fleet-health .pill:hover { border-color: var(--accent); color: var(--text); }
+.fleet-health .pill .status-dot { width: 7px; height: 7px; }
+.fleet-health .pill.zero { opacity: 0.45; cursor: default; }
+.fleet-health .pill.zero:hover { border-color: var(--panel-border); color: inherit; }
+.fleet-health .label { color: var(--text-dim); margin-right: 4px; letter-spacing: 0.04em; text-transform: uppercase; font-size: 11px; }
+.fleet-health .legend-link {
+  margin-left: auto; font-size: 11px; color: var(--text-dim);
+  text-decoration: none; cursor: help;
+}
+.fleet-health .legend-link:hover { color: var(--text); }
+
+/* Card jump-flash (used when fleet-pill click scrolls to a card) */
+@keyframes flash-card {
+  0%, 100% { box-shadow: none; }
+  50%      { box-shadow: 0 0 0 2px var(--accent); }
+}
+.card.flash { animation: flash-card 1.4s ease-in-out 1; }
+
+/* Bullet headline + expand toggle (F4) */
+.mgr-bullet-text { position: relative; }
+.mgr-bullet.collapsible .mgr-bullet-detail { display: none; }
+.mgr-bullet.collapsible.expanded .mgr-bullet-detail { display: inline; }
+.mgr-bullet button.bullet-expand {
+  background: transparent; border: none; padding: 0 0 0 4px;
+  color: var(--accent); cursor: pointer; font: inherit; font-size: 12px;
+}
+.mgr-bullet button.bullet-expand:hover { text-decoration: underline; }
+
+/* Auto-collapsed PoC result (F5) — applied/discarded > 1h old */
+.mgr-poc-result.auto-archived > *:not(.result-header) { display: none; }
+.mgr-poc-result.auto-archived .result-header { opacity: 0.7; }
+
+/* Section batch-refresh button (F8) */
+.brief-section-h3 { display: flex; align-items: center; gap: 8px; }
+.brief-section-h3 button.refresh-stale {
+  background: transparent; border: 1px solid var(--panel-border);
+  color: var(--text-dim); font: inherit; font-size: 10px;
+  padding: 1px 8px; border-radius: 3px; cursor: pointer;
+  letter-spacing: 0.04em; text-transform: uppercase;
+}
+.brief-section-h3 button.refresh-stale:hover { color: var(--text); border-color: var(--accent); }
+.brief-section-h3 button.refresh-stale:disabled { opacity: 0.5; cursor: wait; }
+
+/* F10 — clickable file-path code span */
+.manager-brief a.code-link, .next-content a.code-link {
+  background: rgba(255,255,255,0.06);
+  padding: 1px 5px; border-radius: 3px;
+  font-size: 12px;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--accent);
+}
+.manager-brief a.code-link:hover, .next-content a.code-link:hover {
+  text-decoration: none; border-bottom-style: solid;
+  background: rgba(47, 129, 247, 0.12);
+}
+
+/* F11 — show-prompt collapsible footer */
+.show-prompt-row {
+  margin-top: 8px;
+  display: flex; align-items: center; gap: 10px;
+}
+.show-prompt-row button.show-prompt {
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  color: var(--text-dim);
+  font: inherit; font-size: 11px;
+  padding: 2px 10px; border-radius: 3px;
+  cursor: pointer; letter-spacing: 0.04em;
+}
+.show-prompt-row button.show-prompt:hover { color: var(--text); border-color: var(--accent); }
+.show-prompt-row button.show-prompt:disabled { opacity: 0.5; cursor: wait; }
+.show-prompt-pane {
+  margin-top: 8px;
+  padding: 12px 14px;
+  background: var(--bg);
+  border: 1px solid var(--panel-border);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 6px 6px 0;
+  display: none;
+}
+.show-prompt-pane.expanded { display: block; }
+.show-prompt-pane pre {
+  margin: 0;
+  font: 11.5px/1.55 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  color: var(--text-dim);
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 480px; overflow: auto;
+}
+.show-prompt-pane .meta {
+  font-size: 10px; color: var(--text-dim);
+  margin-bottom: 6px; letter-spacing: 0.04em; text-transform: uppercase;
+}
+
+/* Max-quota-low nudge banner */
+.quota-nudge {
+  margin: 0 0 10px;
+  padding: 6px 10px;
+  background: rgba(210, 153, 34, 0.10);
+  border-left: 3px solid var(--warn);
+  border-radius: 0 4px 4px 0;
+  font-size: 12px;
+  color: var(--text);
+  display: none;
+  align-items: center; gap: 10px;
+}
+.quota-nudge.shown { display: flex; }
+.quota-nudge.severe {
+  background: rgba(248, 81, 73, 0.10);
+  border-left-color: var(--bad);
+}
+.quota-nudge button.switch-haiku {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  color: var(--text);
+  font: inherit; font-size: 11px;
+  padding: 2px 10px; border-radius: 3px;
+  cursor: pointer; margin-left: auto;
+}
+.quota-nudge button.switch-haiku:hover { border-color: var(--accent); }
+.quota-nudge button.dismiss-nudge {
+  background: transparent; border: 1px solid var(--panel-border);
+  color: var(--text-dim);
+  font: inherit; font-size: 11px;
+  padding: 2px 8px; border-radius: 3px;
+  cursor: pointer;
+}
+.quota-nudge button.dismiss-nudge:hover { color: var(--bad); border-color: var(--bad); }
 
 .mgr-tabs {
   display: flex;
@@ -531,17 +721,24 @@ button.refresh-ns:disabled { opacity: 0.5; cursor: wait; }
   <h1>Projects</h1>
   <nav>
     <a href="/utilization/">Utilization</a>
-    <a href="/utilization/projects/" class="active">Projects</a>
   </nav>
-  <span class="updated" id="updated">—</span>
+  <span class="updated" id="updated" title="Last time the project-snapshot poll completed. The Manager's Brief and per-card next-steps have their own freshness shown inline.">—</span>
 </header>
 
 <div class="manager-brief" id="manager-brief">
   <h2>
     <span>Manager's brief · portfolio view <span id="mgr-stale"></span></span>
     <span class="header-controls">
-      <button class="icon-btn" id="btn-minimize-mgr" type="button" title="Minimize the manager panel">_</button>
-      <button class="refresh-mgr" id="btn-refresh-mgr" type="button">Refresh</button>
+      <span class="model-select-label" title="Model the next action you click will use. 'auto' lets the inference router pick (typically Sonnet via Claude Max while Max has quota).">Model:</span>
+      <select id="mgr-model" class="model-select" title="Model hint applied to all subsequent actions on this page (Plan, Investigate, Draft PoC, Refresh, Submit-idea). 'auto' lets the inference router pick.">
+        <option value="">auto</option>
+        <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
+        <option value="claude-sonnet-4-5">Sonnet 4.5</option>
+        <option value="claude-opus-4-1">Opus 4.1</option>
+      </select>
+      <span class="session-cost" id="session-cost" title="Total cost of dispatches that completed since you opened this page. Resets on reload. Sums the cost_usd recorded in the action/proposal/user_idea rows."></span>
+      <button class="icon-btn" id="btn-minimize-mgr" type="button" title="Minimize the manager panel">–</button>
+      <button class="refresh-mgr" id="btn-refresh-mgr" type="button" title="Re-run the manager agent over all 7 projects. Roughly $0.10 on Opus, $0.03 on Sonnet, $0.01 on Haiku — or free if Claude Max session has capacity.">Refresh</button>
     </span>
   </h2>
   <div class="mgr-tabs" id="mgr-tabs"></div>
@@ -554,10 +751,24 @@ button.refresh-ns:disabled { opacity: 0.5; cursor: wait; }
     </div>
     <div id="idea-pending-list"></div>
   </div>
+  <div class="quota-nudge" id="quota-nudge">
+    <span id="quota-nudge-text"></span>
+    <button class="switch-haiku" type="button" title="Set the model selector to Haiku 4.5 — much cheaper API calls (~$0.005/Plan-it) until your Claude Max session resets.">Switch to Haiku</button>
+    <button class="dismiss-nudge" type="button" title="Hide for this session">×</button>
+  </div>
   <div class="body" id="mgr-body"><em>No brief yet — click Refresh.</em></div>
   <div class="meta" id="mgr-meta"></div>
+  <div class="show-prompt-row" id="show-prompt-row" style="display:none;">
+    <button class="show-prompt" id="btn-show-prompt" type="button" title="Show the exact prompt that produced this brief, so you can verify what context the manager agent saw.">Show prompt</button>
+    <span class="meta" id="show-prompt-meta" style="font-size:10px;color:var(--text-dim);"></span>
+  </div>
+  <div class="show-prompt-pane" id="show-prompt-pane">
+    <div class="meta" id="show-prompt-info"></div>
+    <pre id="show-prompt-content"></pre>
+  </div>
 </div>
 
+<div class="fleet-health" id="fleet-health"></div>
 <div id="domains"></div>
 
 <script>
@@ -630,6 +841,98 @@ function buildRunningHtml(action, startIso, label) {
 const MGR_MINIMIZED_KEY = 'utilization.mgrMinimized';
 const MGR_ACTIVE_TAB_KEY = 'utilization.mgrActiveTab';
 const MGR_COLLAPSED_RESULTS_KEY = 'utilization.mgrCollapsedResults';
+const MGR_MODEL_HINT_KEY = 'utilization.mgrModelHint';
+
+function getModelHint() {
+  // Returns the user's selected model id, or '' meaning "let router decide".
+  return localStorage.getItem(MGR_MODEL_HINT_KEY) || '';
+}
+
+function wireUpModelSelector() {
+  const sel = document.getElementById('mgr-model');
+  if (!sel || sel.dataset.wired === '1') return;
+  sel.dataset.wired = '1';
+  const cur = getModelHint();
+  if (cur && [...sel.options].some(o => o.value === cur)) sel.value = cur;
+  sel.classList.toggle('overridden', !!sel.value);
+  sel.addEventListener('change', () => {
+    localStorage.setItem(MGR_MODEL_HINT_KEY, sel.value);
+    sel.classList.toggle('overridden', !!sel.value);
+    updateResolvedModelHint();
+  });
+}
+
+// Show the resolved model in the selector's title attribute. When the user
+// has 'auto' selected, peek at the most recent action result to surface what
+// the router actually picked last time — usually a faithful predictor of the
+// next call's model. Addresses the "what is auto going to do?" friction.
+function updateResolvedModelHint() {
+  const sel = document.getElementById('mgr-model');
+  if (!sel) return;
+  const baseTitle = "Model hint applied to all subsequent actions on this page (Plan, Investigate, Draft PoC, Refresh, Submit-idea). 'auto' lets the inference router pick.";
+  if (sel.value) {
+    sel.title = baseTitle + ` Currently overridden to ${sel.options[sel.selectedIndex].text}.`;
+    return;
+  }
+  const last = window._lastDispatchSummary;
+  if (last) {
+    sel.title = baseTitle + ` Last 'auto' dispatch resolved to: ${last.provider} (${last.model}) ${last.age_text}.`;
+  } else {
+    sel.title = baseTitle;
+  }
+}
+
+// F9 — running cost total. Watches all action/proposal/user_idea rows that
+// completed since this page loaded and sums their cost_usd.
+const _PAGE_LOAD_TS = Date.now();
+function updateSessionCostFromActions(actions, proposals, userIdeas) {
+  let total = 0;
+  let countedRows = 0;
+  let lastDispatch = null;
+  const consider = (row) => {
+    if (!row || !row.ts) return;
+    const t = new Date(row.ts).getTime();
+    if (isNaN(t) || t < _PAGE_LOAD_TS) return;
+    if ((row.cost_usd || 0) > 0) {
+      total += row.cost_usd;
+      countedRows++;
+    }
+    // Track the most recent dispatch (any model) for the resolved-hint preview
+    if (row.provider_used && (!lastDispatch || row.ts > lastDispatch.ts)) {
+      lastDispatch = {
+        provider: row.provider_used,
+        model: row.model_used,
+        ts: row.ts,
+      };
+    }
+  };
+  for (const byAction of Object.values(actions || {})) {
+    for (const row of Object.values(byAction)) consider(row);
+  }
+  for (const byProj of Object.values(proposals || {})) {
+    for (const row of Object.values(byProj)) consider(row);
+  }
+  for (const u of (userIdeas || [])) consider(u);
+
+  if (lastDispatch) {
+    lastDispatch.age_text = fmtAge(lastDispatch.ts);
+    window._lastDispatchSummary = lastDispatch;
+  }
+  updateResolvedModelHint();
+
+  const el = document.getElementById('session-cost');
+  if (!el) return;
+  if (countedRows === 0) {
+    el.textContent = '';
+    el.title = 'No completed dispatches since this page loaded.';
+    el.classList.remove('spending', 'warn');
+    return;
+  }
+  el.textContent = '$' + total.toFixed(3) + ` · ${countedRows} runs`;
+  el.title = `Total cost of ${countedRows} dispatches that completed since this page loaded. Resets on reload.`;
+  el.classList.toggle('warn', total > 1.0);
+  el.classList.toggle('spending', total > 0 && total <= 1.0);
+}
 
 function loadCollapsedResults() {
   try {
@@ -746,17 +1049,25 @@ function injectResultHeaders() {
       ? 'PoC result'
       : `${(el.dataset.action || 'result')} result`;
     const status = el.querySelector('.mgr-poc-banner');
-    header.innerHTML = `<span>${escapeStr(label)}</span>
+    // If we auto-archived this result, show ⌃ — the user can click to reveal.
+    const isHidden = el.classList.contains('auto-archived') || el.classList.contains('collapsed');
+    const chev = isHidden ? '⌃' : '⌄';
+    const archivedNote = el.classList.contains('auto-archived')
+      ? ` <span style="font-size:10px;color:var(--text-dim);">archived (>1h)</span>`
+      : '';
+    header.innerHTML = `<span>${escapeStr(label)}</span>${archivedNote}
       ${status ? `<span style="margin-left:auto;"></span>` : '<span style="flex:1"></span>'}
-      <button class="toggle-result" type="button">⌄</button>`;
+      <button class="toggle-result" type="button" title="Show or hide this result panel.">${chev}</button>`;
     el.insertBefore(header, el.firstChild);
     const btn = header.querySelector('.toggle-result');
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       const key = _resultKey(el);
       const collapsed = loadCollapsedResults();
-      if (el.classList.contains('collapsed')) {
+      const isHiddenNow = el.classList.contains('collapsed') || el.classList.contains('auto-archived');
+      if (isHiddenNow) {
         el.classList.remove('collapsed');
+        el.classList.remove('auto-archived');
         collapsed.delete(key);
         btn.textContent = '⌄';
       } else {
@@ -789,11 +1100,69 @@ function activateRunningTimers(root) {
   });
 }
 
+// Inline code spans that look like file paths or memory-note names get
+// wrapped in a link to the file viewer. The backend /api/file-view
+// endpoint validates the path against an allowlist so this is safe to
+// pass user-influenced text through.
+const FILE_PATH_PATTERN = /^[a-zA-Z0-9_./-]+\.(py|md|txt|json|ya?ml|html|js|css|sh|ps1|sql|log|env|cfg|ini|toml)$/;
+
 function renderInline(s) {
   let out = escapeStr(s);
   out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  out = out.replace(/`([^`]+)`/g, '<code>$1</code>');
+  out = out.replace(/`([^`]+)`/g, (_m, code) => {
+    // Test the unescaped form so the path regex matches naturally.
+    if (FILE_PATH_PATTERN.test(code)) {
+      const safe = escapeStr(code);
+      const href = '/utilization/file-view.html?path=' + encodeURIComponent(code);
+      return `<a class="code-link" href="${href}" target="_blank" rel="noopener" title="Open ${safe} in the file viewer (LAN-only).">${safe}</a>`;
+    }
+    return '<code>' + escapeStr(code) + '</code>';
+  });
   return out.replace(/\n/g, '<br>');
+}
+
+// Bullets in the Manager's brief follow the pattern
+//   **Headline** — paragraph of explanation that may run several sentences
+// Default to showing only the headline + first sentence; an expand toggle
+// reveals the rest. Avoids the "wall of text" friction the audit surfaced.
+function renderBulletWithExpand(text, bulletHash) {
+  // Look for the em-dash separator after a bold headline — the canonical
+  // "claim — explanation" pattern Opus uses for portfolio bullets.
+  const split = text.match(/^(\*\*[^*]+\*\*[^—\n]*?—\s*)([\s\S]+)$/);
+  if (!split) {
+    return renderInline(text);
+  }
+  const headline = split[1];
+  const detail = split[2];
+  // Bail if the detail is already short — no value in hiding ~1 line.
+  if (detail.length < 200) return renderInline(text);
+
+  // Prefer cutting at a sentence boundary: period (or ! ?) followed by a
+  // space and a capital letter. The capital-letter lookahead avoids stopping
+  // at file-extension dots (`mcp_server_http.py`, `Plan A.B`) which were
+  // breaking the first heuristic in audit verification.
+  let cutAt = -1;
+  const sentMatch = detail.match(/[.!?]\s+(?=[A-Z(])/);
+  if (sentMatch && sentMatch.index < 280) {
+    cutAt = sentMatch.index + 1;  // include the punctuation
+  }
+  // Fallback: word-boundary truncate around 160 chars so EVERY long bullet
+  // collapses, even when the agent wrote one giant comma-spliced sentence.
+  if (cutAt < 0) {
+    const target = Math.min(160, detail.length - 40);
+    const slice = detail.slice(0, target);
+    const lastSpace = slice.lastIndexOf(' ');
+    cutAt = lastSpace > 80 ? lastSpace : target;
+  }
+  const firstSentence = detail.slice(0, cutAt).trimEnd();
+  const rest = detail.slice(cutAt);
+  if (rest.trim().length < 30) return renderInline(text);
+  return (
+    renderInline(headline + firstSentence) +
+    '<span class="mgr-bullet-detail">' + renderInline(rest) + '</span>' +
+    ' <button class="bullet-expand" type="button"' +
+    ` data-bullet-hash="${escapeStr(bulletHash)}">…more</button>`
+  );
 }
 
 // Markdown renderer for the manager's brief — supports h3 headers + bullets.
@@ -894,7 +1263,14 @@ function renderDiff(diff) {
 function renderPocResult(projectId, projectName, prop) {
   if (!prop) return '';
   const status = (prop.status || 'pending').toUpperCase();
-  const klass = (prop.status || '').toLowerCase() + (prop.status === 'running' ? ' running-panel' : '');
+  // F5 — auto-archive applied/discarded results > 1h old. They're done,
+  // they don't need to dominate the brief, and a click reveals them.
+  let archivedClass = '';
+  if (prop.ts && (prop.status === 'applied' || prop.status === 'discarded')) {
+    const ageMs = Date.now() - new Date(prop.ts).getTime();
+    if (ageMs > 60 * 60 * 1000) archivedClass = ' auto-archived';
+  }
+  const klass = (prop.status || '').toLowerCase() + (prop.status === 'running' ? ' running-panel' : '') + archivedClass;
   let body = '';
   if (prop.status === 'running') {
     body = buildRunningHtml('draft-poc', prop.ts, `PoC for ${projectName}`);
@@ -988,14 +1364,20 @@ async function renderManagerBulletsWithActions(briefContent, actions, proposalsB
       const hasPoc = Object.keys(props).length > 0;
       const pocClass = hasPoc ? 'has-result' : '';
 
-      // Build the per-project picker buttons
-      const pickerButtons = (registry || []).map(p =>
-        `<button class="poc-pick"
-                 data-project-id="${escapeStr(p.id)}"
-                 data-project-name="${escapeStr(p.name)}"
-                 data-bullet-hash="${escapeStr(h)}"
-                 data-bullet-text="${encodeURIComponent(text)}">${escapeStr(p.name)}</button>`
-      ).join('');
+      // Build the per-project picker buttons. When the registry is empty
+      // (e.g. server failed to load projects.yaml), show a hint so the user
+      // doesn't see an empty box and assume the picker is broken.
+      const pickerButtons = (registry || []).length
+        ? (registry || []).map(p =>
+            `<button class="poc-pick"
+                     data-project-id="${escapeStr(p.id)}"
+                     data-project-name="${escapeStr(p.name)}"
+                     data-bullet-hash="${escapeStr(h)}"
+                     data-bullet-text="${encodeURIComponent(text)}">${escapeStr(p.name)}</button>`
+          ).join('')
+        : `<span class="label" style="color:var(--bad);">
+             No projects loaded — check server log (projects.yaml / PyYAML).
+           </span>`;
 
       // Render existing PoC results for this bullet
       const pocResults = Object.entries(props).map(([pid, prop]) => {
@@ -1007,20 +1389,25 @@ async function renderManagerBulletsWithActions(briefContent, actions, proposalsB
       const ideaTag = isUserIdea
         ? '<span class="user-idea-marker">your idea</span>'
         : '';
+      const bulletHtml = renderBulletWithExpand(text, h);
+      const hasDetail = bulletHtml.includes('mgr-bullet-detail');
       blocks.push(`
-        <div class="mgr-bullet" data-section-id="${sectionId}">
-          <div class="mgr-bullet-text">${ideaTag}${renderInline(text)}</div>
+        <div class="mgr-bullet${hasDetail ? ' collapsible' : ''}" data-section-id="${sectionId}">
+          <div class="mgr-bullet-text">${ideaTag}${bulletHtml}</div>
           <div class="mgr-bullet-actions">
             <button class="mgr-action plan ${planClass}"
                     data-bullet-hash="${escapeStr(h)}"
                     data-bullet-text="${encodeURIComponent(text)}"
-                    data-section="${escapeStr(s.section)}">Plan it</button>
+                    data-section="${escapeStr(s.section)}"
+                    title="Sonnet drafts an implementation plan for this bullet (~30-90s). Free on Claude Max; ~$0.02 on Sonnet API; ~$0.005 on Haiku.">Plan it</button>
             <button class="mgr-action investigate ${invClass}"
                     data-bullet-hash="${escapeStr(h)}"
                     data-bullet-text="${encodeURIComponent(text)}"
-                    data-section="${escapeStr(s.section)}">Investigate</button>
+                    data-section="${escapeStr(s.section)}"
+                    title="Read-only agent (Read/Grep/Glob) gathers concrete evidence for this bullet's claim, ~30-120s. Free on Claude Max; ~$0.02 on Sonnet API.">Investigate</button>
             <button class="mgr-action draft-poc ${pocClass}"
-                    data-bullet-hash="${escapeStr(h)}">Draft PoC ▾</button>
+                    data-bullet-hash="${escapeStr(h)}"
+                    title="Open the project picker — agent will edit ONE project's worktree to demonstrate this recommendation. ~1-3 min, ~$0.05 on Sonnet, ~$0.20 on Opus.">Draft PoC ▾</button>
           </div>
         </div>
         <div class="mgr-poc-picker" data-bullet-hash="${escapeStr(h)}" data-section-id="${sectionId}">
@@ -1123,9 +1510,9 @@ function buildCard(p) {
     </div>
     <div class="desc">${escape(p.description || '')}</div>
     <div class="meta">
-      <div>service</div>           <div class="v">${escape((p.health && p.health.service) || '—')} ${escape((p.health && p.health.service_status) || '')}</div>
+      <div>service</div>           <div class="v"${(p.health && p.health.service) ? '' : ' title="No NSSM service registered (e.g. embedded under another service\'s venv, or not deployed yet)."'}>${escape((p.health && p.health.service) || '—')} ${escape((p.health && p.health.service_status) || '')}</div>
       <div>last commit</div>       <div class="v">${lastCommit}${p.health && p.health.last_commit_subject ? ' — ' + escape(p.health.last_commit_subject) : ''}</div>
-      <div>log freshness</div>     <div class="v">${logAge}</div>
+      <div>log freshness</div>     <div class="v"${(p.health && p.health.log_age_hours != null) ? '' : ' title="No log file at the configured path (or no log_path set in projects.yaml)."'}>${logAge}</div>
       <div>repo path</div>         <div class="v">${escape(p.repo_path)}</div>
     </div>
     <div class="next">
@@ -1133,7 +1520,7 @@ function buildCard(p) {
         <span>Next steps</span>
         <button class="refresh-ns" data-project-id="${escape(p.id)}">Refresh</button>
       </h3>
-      <div class="next-content" id="ns-${escape(p.id)}">${renderMarkdown(p.next_steps && p.next_steps.content)}</div>
+      <div class="next-content" id="ns-${escape(p.id)}">${renderMarkdownRich((p.next_steps && p.next_steps.content) || '')}</div>
       <div class="next-meta" id="ns-meta-${escape(p.id)}">
         ${p.next_steps && p.next_steps.ts
           ? `generated ${fmtAge(p.next_steps.ts)} via ${escape(p.next_steps.provider_used || '')} (${escape(p.next_steps.model_used || '')}); ${bundleSummaryLine(p.next_steps.bundle_summary)}`
@@ -1156,7 +1543,7 @@ function buildCard(p) {
       if (!r.ok || d.error) {
         target.innerHTML = `<div class="bullet-error">${escape(d.error || 'failed')}</div>`;
       } else {
-        target.innerHTML = renderMarkdown(d.content);
+        target.innerHTML = renderMarkdownRich(d.content || '');
         document.getElementById('ns-meta-' + p.id).textContent =
           `generated just now via ${d.provider || ''} (${d.model || ''}); ${bundleSummaryLine(d.bundle_summary)}`;
       }
@@ -1170,6 +1557,43 @@ function buildCard(p) {
   return card;
 }
 
+// F6 — render a fleet health summary above the project grid: counts of
+// green / yellow / red projects with click-to-jump pills. Also adds a
+// "Refresh stale next-steps" button so an operator who arrives to a wall
+// of "click Refresh" cards can fan them out in one click (F8).
+function renderFleetHealth(projects) {
+  const root = document.getElementById('fleet-health');
+  if (!root) return;
+  const counts = { green: 0, yellow: 0, red: 0, unknown: 0 };
+  for (const p of projects) {
+    const o = (p.overall || 'unknown').toLowerCase();
+    if (counts[o] !== undefined) counts[o]++;
+    else counts.unknown++;
+  }
+  const total = projects.length;
+  const pill = (status, label, n) =>
+    `<span class="pill ${n === 0 ? 'zero' : ''}" data-target-status="${status}"
+            title="${escape(label)} — click to jump to the first ${status} card">
+       <span class="status-dot status-${status}"></span>${n} ${escape(label)}
+     </span>`;
+  root.innerHTML =
+    `<span class="label">Fleet (${total}):</span>` +
+    pill('green',   'healthy',  counts.green) +
+    pill('yellow',  'stale',    counts.yellow) +
+    pill('red',     'severe',   counts.red) +
+    pill('unknown', 'unknown',  counts.unknown) +
+    `<button class="refresh-stale" type="button"
+             title="Fan out parallel /refresh-next-steps to every card whose recommendations are missing or older than ~24h. Each is one Sonnet call.">
+       Refresh stale next-steps
+     </button>` +
+    `<a class="legend-link" href="#" title="Status legend:
+green: service running and log fresh
+yellow: log stale (1×–3× threshold) or service status unclear
+red: service stopped, OR log severely stale (>3× threshold)
+unknown: no signals (e.g. embedded/no-service projects)
+">legend</a>`;
+}
+
 async function refresh() {
   try {
     const r = await fetch('/utilization/api/projects/snapshot', { cache: 'no-store' });
@@ -1177,6 +1601,9 @@ async function refresh() {
     const d = await r.json();
     const root = document.getElementById('domains');
     root.innerHTML = '';
+    renderFleetHealth(d.projects || []);
+    wireUpFleetHealthPill();
+    wireUpBatchRefresh();
 
     // Group by domain, preserving order of first appearance
     const byDomain = new Map();
@@ -1256,6 +1683,16 @@ async function loadManagerBrief() {
     wireUpDraftPocButtons();
     wireUpSubmitIdea();
     wireUpMinimize();
+    wireUpModelSelector();
+    wireUpBulletExpand();
+    wireUpFleetHealthPill();
+    wireUpBatchRefresh();
+    wireUpShowPrompt();
+    updateSessionCostFromActions(actions, proposals, userIdeas);
+
+    // F11 — surface the "show prompt" button only when a brief is loaded.
+    const showRow = document.getElementById('show-prompt-row');
+    if (showRow) showRow.style.display = brief ? 'flex' : 'none';
     renderTabs();
     applyTabFilter();
     injectResultHeaders();
@@ -1304,31 +1741,88 @@ function renderPendingIdeas(userIdeas) {
       div.innerHTML =
         '<strong style="color:var(--bad);">Failed:</strong> ' +
         escapeStr(u.error || 'unknown') +
-        ` <span class="raw">(${escapeStr((u.idea || '').slice(0, 100))}…)</span>`;
+        ` <span class="raw">(${escapeStr((u.idea || '').slice(0, 100))}…)</span>` +
+        // Dismiss × — addresses the audit finding that a stale failure
+        // banner had no exit and made the dashboard look broken.
+        ` <button class="dismiss-idea" type="button"` +
+        ` data-idea-id="${u.id}" title="Dismiss this failure (hides it from the brief; row stays in the DB for audit).">×</button>`;
     }
     list.appendChild(div);
   }
+  // Wire up dismiss buttons
+  list.querySelectorAll('button.dismiss-idea').forEach(btn => {
+    if (btn.dataset.wired === '1') return;
+    btn.dataset.wired = '1';
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.ideaId;
+      btn.disabled = true;
+      try {
+        const r = await fetch(`/utilization/api/manager/user-ideas/${encodeURIComponent(id)}/dismiss`, { method: 'POST' });
+        if (r.ok) {
+          // Remove the parent row immediately; next poll will confirm.
+          btn.closest('.idea-pending')?.remove();
+        } else {
+          const d = await r.json().catch(() => ({}));
+          alert('Dismiss failed: ' + (d.error || r.status));
+          btn.disabled = false;
+        }
+      } catch (e) {
+        alert('Dismiss error: ' + (e.message || e));
+        btn.disabled = false;
+      }
+    });
+  });
 }
 
 function wireUpSubmitIdea() {
   const btn = document.getElementById('btn-submit-idea');
   const input = document.getElementById('idea-input');
+  const hint = document.querySelector('.idea-box .hint');
   if (!btn || !input || btn.dataset.wired === '1') return;
   btn.dataset.wired = '1';
+
+  // Live-disable the button while the textarea is empty so the affordance
+  // matches the behavior. Persist the original hint text to restore later.
+  const origHint = hint ? hint.textContent : '';
+  const sync = () => {
+    const empty = !(input.value || '').trim();
+    btn.disabled = empty;
+    btn.title = empty ? 'Enter an idea first' : '';
+    if (hint && hint.classList.contains('warn') && !empty) {
+      hint.classList.remove('warn');
+      hint.textContent = origHint;
+    }
+  };
+  input.addEventListener('input', sync);
+  sync();
+
   btn.addEventListener('click', async () => {
     const idea = (input.value || '').trim();
     if (!idea) {
+      // Visible feedback: shake the textarea + flip the hint to a warning.
+      input.classList.remove('shake');
+      void input.offsetWidth;            // restart the animation
+      input.classList.add('shake');
+      setTimeout(() => input.classList.remove('shake'), 350);
+      if (hint) {
+        hint.classList.add('warn');
+        hint.textContent = 'Type an idea before submitting.';
+      }
       input.focus();
       return;
     }
     btn.disabled = true;
+    btn.classList.add('is-busy');
     const orig = btn.textContent;
     btn.textContent = 'Submitting…';
+    const ideaBody = { idea };
+    const ideaHint = getModelHint();
+    if (ideaHint) ideaBody.model_hint = ideaHint;
     try {
       const r = await fetch('/utilization/api/manager/submit-idea', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ idea }),
+        body: JSON.stringify(ideaBody),
       });
       const d = await r.json();
       if (!r.ok && !d.queued) {
@@ -1342,8 +1836,9 @@ function wireUpSubmitIdea() {
     } catch (e) {
       alert('Submit error: ' + (e.message || e));
     } finally {
-      btn.disabled = false;
+      btn.classList.remove('is-busy');
       btn.textContent = orig;
+      sync();   // re-disable if textarea is now empty
     }
   });
 }
@@ -1384,11 +1879,14 @@ function wireUpDraftPocButtons() {
         slot.appendChild(placeholder);
         activateRunningTimers(placeholder);
       }
+      const pocReqBody = { bullet_text: text };
+      const pocHint = getModelHint();
+      if (pocHint) pocReqBody.model_hint = pocHint;
       try {
         const r = await fetch(
           `/utilization/api/manager/bullets/${encodeURIComponent(h)}/draft-poc/${encodeURIComponent(projectId)}`,
           { method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ bullet_text: text }) }
+            body: JSON.stringify(pocReqBody) }
         );
         const d = await r.json();
         if (!r.ok && !d.queued) {
@@ -1445,9 +1943,199 @@ function wireUpDraftPocButtons() {
   });
 }
 
+// Max-quota-low nudge: poll the utilization snapshot in parallel with the
+// projects snapshot, and surface a banner when Claude Max session is near
+// full OR when the weekly all-models bucket is past 90%. Encourages the
+// user to flip the model selector to Haiku before they accidentally start
+// dispatching expensive Opus calls against an empty Max session.
+const _NUDGE_DISMISSED_KEY = 'utilization.quotaNudgeDismissed';
+async function pollQuotaNudge() {
+  const dismissed = sessionStorage.getItem(_NUDGE_DISMISSED_KEY) === '1';
+  const nudge = document.getElementById('quota-nudge');
+  if (!nudge) return;
+  if (dismissed) {
+    nudge.classList.remove('shown');
+    return;
+  }
+  try {
+    const r = await fetch('/utilization/api/snapshot', {cache:'no-store'});
+    if (!r.ok) return;
+    const d = await r.json();
+    const c = d.claude || {};
+    const sessionPct = c.session_pct;
+    const weeklyPct = c.weekly_all_pct;
+    const text = document.getElementById('quota-nudge-text');
+    let triggered = false;
+    let severe = false;
+    let msg = '';
+    if (sessionPct != null && sessionPct >= 95) {
+      triggered = true; severe = true;
+      msg = `Claude Max 5-hour session is ${sessionPct.toFixed(0)}% used (resets ${c.session_resets_in_text || 'soon'}). Until reset, every dispatch falls through to billable API.`;
+    } else if (sessionPct != null && sessionPct >= 80) {
+      triggered = true;
+      msg = `Claude Max session at ${sessionPct.toFixed(0)}% — about to fall through to billable API. Resets ${c.session_resets_in_text || 'soon'}.`;
+    } else if (weeklyPct != null && weeklyPct >= 90) {
+      triggered = true; severe = true;
+      msg = `Claude Max weekly all-models bucket is ${weeklyPct.toFixed(0)}% used (resets ${c.weekly_resets_at_text || 'next week'}). Even auto routing will burn API budget.`;
+    } else if (weeklyPct != null && weeklyPct >= 80) {
+      triggered = true;
+      msg = `Claude Max weekly bucket at ${weeklyPct.toFixed(0)}% — close to threshold. Resets ${c.weekly_resets_at_text || 'next week'}.`;
+    }
+    if (triggered && text) {
+      text.textContent = msg;
+      nudge.classList.toggle('severe', severe);
+      nudge.classList.add('shown');
+    } else {
+      nudge.classList.remove('shown');
+    }
+  } catch (e) { /* poll silently */ }
+}
+function wireUpQuotaNudge() {
+  const nudge = document.getElementById('quota-nudge');
+  if (!nudge || nudge.dataset.wired === '1') return;
+  nudge.dataset.wired = '1';
+  nudge.querySelector('button.switch-haiku')?.addEventListener('click', () => {
+    const sel = document.getElementById('mgr-model');
+    if (sel) {
+      sel.value = 'claude-haiku-4-5-20251001';
+      sel.dispatchEvent(new Event('change'));
+    }
+    nudge.classList.remove('shown');
+  });
+  nudge.querySelector('button.dismiss-nudge')?.addEventListener('click', () => {
+    sessionStorage.setItem(_NUDGE_DISMISSED_KEY, '1');
+    nudge.classList.remove('shown');
+  });
+}
+
+// F11 — show-prompt: fetch the prompt that produced the current brief
+// and reveal it in the collapsible footer pane. The prompt isn't included
+// in the polled snapshot because it's large; we lazy-load on first click.
+function wireUpShowPrompt() {
+  const btn = document.getElementById('btn-show-prompt');
+  const pane = document.getElementById('show-prompt-pane');
+  const info = document.getElementById('show-prompt-info');
+  const content = document.getElementById('show-prompt-content');
+  const meta = document.getElementById('show-prompt-meta');
+  if (!btn || btn.dataset.wired === '1') return;
+  btn.dataset.wired = '1';
+  btn.addEventListener('click', async () => {
+    if (pane.classList.contains('expanded')) {
+      pane.classList.remove('expanded');
+      btn.textContent = 'Show prompt';
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = 'Loading…';
+    try {
+      const r = await fetch('/utilization/api/manager/snapshot?include_prompt=1', {cache:'no-store'});
+      const d = await r.json();
+      const prompt = d.brief && d.brief.prompt;
+      if (!prompt) {
+        info.textContent = 'No prompt stored for this brief — it was generated before the show-prompt feature was added (or by a different code path). Click Refresh to regenerate, then try again.';
+        content.textContent = '';
+      } else {
+        const briefTs = (d.brief && d.brief.ts) || '';
+        const provider = (d.brief && d.brief.provider_used) || '';
+        const model = (d.brief && d.brief.model_used) || '';
+        info.textContent = `Brief ts=${briefTs} · ${provider} (${model}) · ${prompt.length.toLocaleString()} chars`;
+        content.textContent = prompt;
+        if (meta) meta.textContent = `(${prompt.length.toLocaleString()} chars)`;
+      }
+      pane.classList.add('expanded');
+      btn.textContent = 'Hide prompt';
+    } catch (e) {
+      alert('Failed to load prompt: ' + (e.message || e));
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+
+// F4 — expand a collapsed bullet to show the rest of its detail.
+function wireUpBulletExpand() {
+  document.querySelectorAll('.mgr-bullet button.bullet-expand').forEach(btn => {
+    if (btn.dataset.wired === '1') return;
+    btn.dataset.wired = '1';
+    btn.addEventListener('click', () => {
+      const bullet = btn.closest('.mgr-bullet');
+      if (!bullet) return;
+      const isExpanded = bullet.classList.toggle('expanded');
+      btn.textContent = isExpanded ? 'less' : '…more';
+    });
+  });
+}
+
+// F6/F7 — clickable fleet-health pill: scroll to first card matching the
+// clicked status tier and flash it. Wires to whatever pills are currently
+// rendered by renderFleetHealth().
+function wireUpFleetHealthPill() {
+  document.querySelectorAll('.fleet-health .pill[data-target-status]').forEach(pill => {
+    if (pill.dataset.wired === '1') return;
+    pill.dataset.wired = '1';
+    pill.addEventListener('click', () => {
+      if (pill.classList.contains('zero')) return;
+      const targetStatus = pill.dataset.targetStatus;
+      const cards = [...document.querySelectorAll('.card')];
+      const target = cards.find(c => !!c.querySelector('.status-dot.status-' + targetStatus));
+      if (!target) return;
+      target.scrollIntoView({behavior:'smooth', block:'center'});
+      target.classList.remove('flash');
+      void target.offsetWidth;
+      target.classList.add('flash');
+    });
+  });
+}
+
+// F8 — batch refresh of stale next-steps for every project card with
+// either no next-steps content or a content older than 24h. Fans out
+// parallel POSTs to /api/projects/<id>/refresh-next-steps.
+function wireUpBatchRefresh() {
+  const btn = document.querySelector('button.refresh-stale');
+  if (!btn || btn.dataset.wired === '1') return;
+  btn.dataset.wired = '1';
+  btn.addEventListener('click', async () => {
+    const cards = [...document.querySelectorAll('.card[data-project-id]')];
+    const stale = cards.filter(c => {
+      const nsContent = c.querySelector('.next-content');
+      if (!nsContent) return false;
+      const txt = nsContent.textContent || '';
+      if (txt.includes('No recommendations yet')) return true;
+      const meta = c.querySelector('.next-meta')?.textContent || '';
+      return /\d+\s*(d|h)\s*ago/.test(meta) && /([2-9]\d|1\d\d)\s*h\s*ago|\d+\s*d\s*ago/.test(meta);
+    });
+    if (!stale.length) {
+      alert('Nothing stale — all next-steps are fresh.');
+      return;
+    }
+    if (!confirm(`Refresh next-steps for ${stale.length} project(s)? Each is one Sonnet call (~$0.02 each on API; free if Claude Max has capacity).`)) return;
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = `Refreshing ${stale.length}…`;
+    try {
+      await Promise.all(stale.map(c => {
+        const id = c.dataset.projectId;
+        const ns = c.querySelector('.next-content');
+        if (ns) ns.innerHTML = '<em>Asking Claude…</em>';
+        return fetch(`/utilization/api/projects/${encodeURIComponent(id)}/refresh-next-steps`,
+                     { method: 'POST' }).then(r => r.json()).then(d => ({id, d}))
+          .catch(e => ({id, d: {error: e.message}}));
+      }));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = orig;
+      // Force a snapshot poll so the UI shows fresh content
+      refresh();
+    }
+  });
+}
+
 function wireUpManagerActionButtons() {
   document.querySelectorAll('.manager-brief button.mgr-action').forEach(btn => {
     if (btn.dataset.wired === '1') return;
+    // .draft-poc is wired separately by wireUpDraftPocButtons — it opens the
+    // project picker rather than dispatching an action directly.
+    if (btn.classList.contains('draft-poc')) return;
     btn.dataset.wired = '1';
     btn.addEventListener('click', async () => {
       const action = btn.classList.contains('plan') ? 'plan' : 'investigate';
@@ -1474,12 +2162,15 @@ function wireUpManagerActionButtons() {
         activateRunningTimers(placeholder);
       }
       try {
+        const reqBody = { bullet_text: text, section };
+        const hint = getModelHint();
+        if (hint) reqBody.model_hint = hint;
         const res = await fetch(
           `/utilization/api/manager/bullets/${encodeURIComponent(h)}/${action}`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ bullet_text: text, section }),
+            body: JSON.stringify(reqBody),
           }
         );
         const d = await res.json();
@@ -1516,26 +2207,58 @@ function wireUpManagerActionButtons() {
   });
 }
 
+function showRefreshError(msg) {
+  // Surface a refresh failure inline above the brief without clobbering the
+  // existing bullets — the cached brief is still useful even when a re-run
+  // fails (e.g. inference provider down).
+  let banner = document.getElementById('mgr-refresh-error');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'mgr-refresh-error';
+    banner.className = 'idea-pending failed';
+    banner.style.margin = '0 0 10px';
+    const body = document.getElementById('mgr-body');
+    body.parentNode.insertBefore(banner, body);
+  }
+  banner.innerHTML =
+    '<strong style="color:var(--bad);">Refresh failed:</strong> ' + escapeStr(msg);
+}
+function clearRefreshError() {
+  const banner = document.getElementById('mgr-refresh-error');
+  if (banner) banner.remove();
+}
+
 const mgrBtn = document.getElementById('btn-refresh-mgr');
 if (mgrBtn) {
   mgrBtn.addEventListener('click', async () => {
     mgrBtn.disabled = true;
     const orig = mgrBtn.textContent;
     mgrBtn.textContent = 'Asking Sonnet…';
-    document.getElementById('mgr-body').innerHTML = '<em>Manager agent reviewing all 6 projects (60–120s typical)…</em>';
+    clearRefreshError();
+    const refreshBody = {};
+    const refreshHint = getModelHint();
+    if (refreshHint) refreshBody.model_hint = refreshHint;
     try {
-      const r = await fetch('/utilization/api/manager/refresh', { method: 'POST' });
+      const r = await fetch('/utilization/api/manager/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(refreshBody),
+      });
       const d = await r.json();
       if (!r.ok || d.error) {
-        document.getElementById('mgr-body').innerHTML = '<em style="color:var(--bad);">' + escapeStr(d.error || 'failed') + '</em>';
+        showRefreshError(d.error || ('HTTP ' + r.status));
       } else {
         await loadManagerBrief();
       }
     } catch (e) {
-      document.getElementById('mgr-body').innerHTML = '<em style="color:var(--bad);">' + escapeStr(e.message || e) + '</em>';
+      showRefreshError(e.message || String(e));
     } finally {
       mgrBtn.disabled = false;
       mgrBtn.textContent = orig;
+      // Always update the header timestamp so the user sees the attempt
+      // happened even when the refresh itself failed.
+      const upd = document.getElementById('updated');
+      if (upd) upd.textContent = 'updated ' + new Date().toLocaleTimeString();
     }
   });
 }
@@ -1543,6 +2266,9 @@ if (mgrBtn) {
 loadManagerBrief();
 refresh();
 setInterval(refresh, 30000);
+wireUpQuotaNudge();
+pollQuotaNudge();
+setInterval(pollQuotaNudge, 60000);  // every minute is plenty for quota state
 // loadManagerBrief schedules its own next call adaptively (4s while
 // tasks running, 60s otherwise) — see _scheduleMgrPoll.
 </script>

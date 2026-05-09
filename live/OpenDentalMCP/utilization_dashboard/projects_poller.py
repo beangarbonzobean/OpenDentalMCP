@@ -180,11 +180,25 @@ def _aggregate(health: HealthCheck) -> tuple[str, str]:
         else:
             reasons.append(f"{health.service} is {health.service_status}")
 
-    # Log staleness: yellow.
+    # Log staleness: yellow if mildly stale, red if severely stale (>3x the
+    # configured threshold). A 24h log barely past 24h is a heads-up; a
+    # 1098h log past 24h is a service that's been silent for 45 days and
+    # should not share visual treatment with the heads-up case.
     if health.log_stale:
-        reasons.append(f"log stale ({health.log_age_hours:.1f}h)"
-                       if health.log_age_hours is not None
-                       else "log not found")
+        log_msg = (
+            f"log stale ({health.log_age_hours:.1f}h)"
+            if health.log_age_hours is not None
+            else "log not found"
+        )
+        threshold = max(1, health.log_stale_after_hours)
+        multiple = (
+            (health.log_age_hours / threshold)
+            if health.log_age_hours is not None
+            else 0.0
+        )
+        if multiple > 3.0:
+            return "red", log_msg
+        reasons.append(log_msg)
 
     if reasons:
         return "yellow", "; ".join(reasons)

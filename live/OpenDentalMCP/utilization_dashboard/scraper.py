@@ -143,6 +143,18 @@ def parse_claude_usage_json(usage: dict, prepaid_credits: dict | None = None) ->
     if "utilization" in omelette:
         out["weekly_design_pct"] = float(omelette["utilization"])
 
+    # Opus has a dedicated weekly bucket separate from "All models" on plans
+    # where Opus access is provisioned. When the field exists and is non-null
+    # we surface it; some plan tiers send `null` for buckets they don't gate.
+    opus = usage.get("seven_day_opus") or {}
+    if isinstance(opus, dict) and "utilization" in opus:
+        out["weekly_opus_pct"] = float(opus["utilization"])
+
+    # Cowork (Claude Code background routines) — also its own bucket on Max.
+    cowork = usage.get("seven_day_cowork") or {}
+    if isinstance(cowork, dict) and "utilization" in cowork:
+        out["weekly_cowork_pct"] = float(cowork["utilization"])
+
     extra = usage.get("extra_usage") or {}
     if extra:
         # used_credits and monthly_limit are in cents per the API.

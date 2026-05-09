@@ -38,7 +38,9 @@ from utilization_dashboard import (
     projects_poller,
     projects_storage,
     scraper,
+    skills_runner,
     storage,
+    verifier,
     worktree_manager,
 )
 
@@ -109,6 +111,76 @@ def index():
     return send_from_directory(STATIC_DIR, "index.html")
 
 
+# ---------------------------------------------------------------------------
+# Automation-monitor proxy
+# ---------------------------------------------------------------------------
+#
+# The AutomationMonitor MCP service (port 8089) is the source of truth for
+# "things that should keep running" health. The dashboard surfaces it as a
+# card. We proxy server-side so the bearer token never leaves the LAN.
+
+_AUTOMATION_MCP_URL = os.environ.get(
+    "AUTOMATION_MONITOR_URL", "http://127.0.0.1:8089/mcp"
+)
+_AUTOMATION_TOKEN_PATH = Path(os.environ.get(
+    "AUTOMATION_MONITOR_TOKEN_FILE",
+    r"C:\Users\Administrator\Desktop\Cursor\AutomationMonitor\.mcp_token",
+))
+
+
+def _automation_token() -> str:
+    """Read the token fresh on every call so a token rotation doesn't
+    require restarting this dashboard."""
+    return _AUTOMATION_TOKEN_PATH.read_text(encoding="utf-8").strip()
+
+
+@utilization_bp.get("/api/automation/health")
+def api_automation_health():
+    """Snapshot of automation-monitor: overall state, per-state counts,
+    and the per-entry list. UI uses this for the Automation card."""
+    import json as _json
+    import urllib.request
+
+    body = _json.dumps({
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "id": 1,
+        "params": {"name": "list_automations", "arguments": {}},
+    }).encode("utf-8")
+
+    try:
+        token = _automation_token()
+    except FileNotFoundError:
+        return jsonify({
+            "error": "automation-monitor token file not found; install AutomationMonitorService",
+        }), 503
+
+    req = urllib.request.Request(
+        _AUTOMATION_MCP_URL,
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            payload = _json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 502
+
+    if "error" in payload:
+        return jsonify({"error": payload["error"].get("message", "unknown")}), 502
+
+    text = payload.get("result", {}).get("content", [{}])[0].get("text", "{}")
+    try:
+        parsed = _json.loads(text)
+    except _json.JSONDecodeError:
+        return jsonify({"error": "automation-monitor returned malformed JSON"}), 502
+    return jsonify(parsed)
+
+
 @utilization_bp.get("/projects/")
 def projects_index():
     return send_from_directory(STATIC_DIR, "projects.html")
@@ -140,18 +212,128 @@ def api_projects_snapshot():
     return jsonify({"projects": statuses})
 
 
+# ---------------------------------------------------------------------------
+# File viewer — supports clickable inline code spans in the manager brief
+# (file paths and memory-note names jump to a read-only viewer page).
+# ---------------------------------------------------------------------------
+
+# Roots a path is allowed to resolve under. Any resolved absolute path that
+# isn't inside one of these is rejected with 403 — protects against `..`
+# traversal and absolute-path injection.
+_FILE_VIEW_ROOTS = [
+    projects_poller._GIT_ROOT.resolve(),
+    (Path.home() / ".claude" / "projects" /
+        "C--Users-Administrator-Desktop-Cursor-OpenDentalMCP" / "memory").resolve(),
+]
+_FILE_VIEW_MAX_BYTES = 512 * 1024  # 512 KB cap — bullets reference source files, not blobs.
+_FILE_VIEW_ALLOWED_EXT = {
+    ".py", ".md", ".txt", ".json", ".yaml", ".yml",
+    ".html", ".js", ".css", ".sh", ".ps1", ".sql", ".log", ".env",
+    ".cfg", ".ini", ".toml",
+}
+
+
+def _resolve_file_view_path(rel_path: str) -> Optional[Path]:
+    """Resolve a user-provided relative path under one of the allowed roots.
+
+    Returns the absolute Path if safe, None otherwise. Rejects paths with
+    `..`, absolute paths, paths whose extension isn't allowlisted, and any
+    resolution that escapes _FILE_VIEW_ROOTS.
+    """
+    if not rel_path or ".." in rel_path.split("/") or ".." in rel_path.split("\\"):
+        return None
+    rel = Path(rel_path)
+    if rel.is_absolute():
+        return None
+    if rel.suffix.lower() not in _FILE_VIEW_ALLOWED_EXT:
+        return None
+    for root in _FILE_VIEW_ROOTS:
+        candidate = (root / rel).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            continue  # escapes this root; try next
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
+@utilization_bp.get("/api/file-view")
+def api_file_view():
+    """Read a file's contents for the inline file-link viewer.
+
+    Query params:
+      path: relative path under either the OpenDentalMCP git root or the
+            user's Claude memory directory. `..` is rejected.
+
+    Returns JSON: {ok, path, abs_path, size, content, mtime} or
+                  {error} with a 4xx status.
+    """
+    rel_path = (request.args.get("path") or "").strip()
+    if not rel_path:
+        return jsonify({"error": "missing 'path' query param"}), 400
+
+    abs_path = _resolve_file_view_path(rel_path)
+    if abs_path is None:
+        return jsonify({
+            "error": (
+                "path is not allowlisted (rejected for traversal, "
+                "absolute path, missing file, or unsupported extension)"
+            ),
+        }), 403
+
+    try:
+        size = abs_path.stat().st_size
+        if size > _FILE_VIEW_MAX_BYTES:
+            return jsonify({
+                "error": (
+                    f"file too large ({size} bytes); cap is "
+                    f"{_FILE_VIEW_MAX_BYTES} bytes for the inline viewer"
+                ),
+                "size": size,
+            }), 413
+        content = abs_path.read_text(encoding="utf-8", errors="replace")
+        mtime_iso = (
+            os.path.getmtime(abs_path)
+        )
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
+
+    return jsonify({
+        "ok": True,
+        "path": rel_path,
+        "abs_path": str(abs_path),
+        "size": size,
+        "content": content,
+        "mtime": mtime_iso,
+        "ext": abs_path.suffix.lower(),
+    })
+
+
 @utilization_bp.get("/api/manager/snapshot")
 def api_manager_snapshot():
-    """Latest manager's brief + metadata for the projects-page header."""
-    return jsonify({"brief": projects_storage.latest_manager_brief()})
+    """Latest manager's brief + metadata for the projects-page header.
+
+    Pass ?include_prompt=1 to also receive the original prompt that produced
+    the brief — used by the 'show prompt' UI footer to let the user verify
+    what context the manager agent saw. Default-off because the prompt can
+    be 10-20k chars and the UI polls this endpoint frequently.
+    """
+    include_prompt = request.args.get("include_prompt") in ("1", "true", "yes")
+    return jsonify({
+        "brief": projects_storage.latest_manager_brief(include_prompt=include_prompt),
+    })
 
 
 MANAGER_OPUS_MODEL = os.environ.get("ROUTER_OPUS_MODEL", "claude-opus-4-1")
 
 
-def _run_user_idea_in_background(idea_id: int, idea: str) -> None:
-    """Background worker: bundle context, ask Opus to produce a polished
-    bullet from the user's idea, store it linked to the idea row."""
+def _run_user_idea_in_background(
+    idea_id: int, idea: str, model_hint: str = "",
+) -> None:
+    """Background worker: bundle context, ask Opus (or the user-selected
+    model) to produce a polished bullet from the user's idea, store it
+    linked to the idea row."""
     import hashlib
     import re as _re
 
@@ -184,7 +366,8 @@ def _run_user_idea_in_background(idea_id: int, idea: str) -> None:
             prompt,
             max_tokens=600,
             timeout=240,
-            model_hint=MANAGER_OPUS_MODEL,    # Opus for consistent voice
+            # User-selected hint wins; otherwise default to Opus for voice.
+            model_hint=model_hint or MANAGER_OPUS_MODEL,
         )
     except Exception as e:
         projects_storage.update_user_idea(
@@ -229,14 +412,28 @@ def api_submit_idea():
     if len(idea) > 4000:
         return jsonify({"error": "idea too long (max 4000 chars)"}), 400
 
+    model_hint = (body.get("model_hint") or "").strip()
     idea_id = projects_storage.write_user_idea(idea)
-    async_runner.submit(_run_user_idea_in_background, idea_id, idea)
+    async_runner.submit(_run_user_idea_in_background, idea_id, idea, model_hint)
     return jsonify({
         "ok": True,
         "queued": True,
         "idea_id": idea_id,
         "message": "Manager processing your idea — poll /api/manager/actions for the bullet.",
     }), 202
+
+
+@utilization_bp.post("/api/manager/user-ideas/<int:idea_id>/dismiss")
+def api_dismiss_user_idea(idea_id: int):
+    """Hide a user-submitted idea (failed or stale) from the brief.
+
+    The row stays in the DB for audit, but list_user_ideas filters on
+    status != 'dismissed' so the UI no longer shows it.
+    """
+    ok = projects_storage.dismiss_user_idea(idea_id)
+    if not ok:
+        return jsonify({"error": f"no user_idea with id={idea_id} (or already dismissed)"}), 404
+    return jsonify({"ok": True, "dismissed_id": idea_id})
 
 
 @utilization_bp.get("/api/manager/actions")
@@ -265,10 +462,14 @@ def api_manager_actions():
 
 @utilization_bp.post("/api/manager/refresh")
 def api_manager_refresh():
-    """Bundle all-project state and ask OPUS to produce a portfolio brief.
-    Opus is preferred over Sonnet for portfolio-level reasoning — slower
-    but considers the relationships between projects more carefully."""
+    """Bundle all-project state and ask OPUS (or the user-selected model)
+    to produce a portfolio brief. Opus is the default — portfolio-level
+    reasoning benefits from the larger model — but the UI's model selector
+    can override per-request via {"model_hint": "..."}."""
     prompt, summary = manager_bundler.build()
+
+    body = request.get_json(silent=True) or {}
+    model_hint = (body.get("model_hint") or "").strip() or MANAGER_OPUS_MODEL
 
     try:
         from inference_router import Profile, dispatch
@@ -286,7 +487,7 @@ def api_manager_refresh():
             prompt,
             max_tokens=2000,
             timeout=420,                      # Opus runs slower; allow more
-            model_hint=MANAGER_OPUS_MODEL,    # explicit Opus override
+            model_hint=model_hint,
         )
     except Exception as e:
         log.exception("manager refresh dispatch failed: %s", e)
@@ -300,6 +501,7 @@ def api_manager_refresh():
         cost_usd=result.cost_usd,
         projects_in_bundle=summary.project_ids,
         bundle_chars=summary.total_chars,
+        prompt=prompt,
     )
     return jsonify({
         "ok": True,
@@ -319,6 +521,7 @@ def _run_manager_action_in_background(
     bullet_text: str,
     section: str,
     running_ts: str,
+    model_hint: str = "",
 ) -> None:
     """Background worker that does the actual dispatch + status update."""
     try:
@@ -358,6 +561,7 @@ def _run_manager_action_in_background(
             timeout=240,
             allowed_tools=allowed_tools,
             cwd=cwd,
+            model_hint=model_hint or None,
         )
     except Exception as e:
         projects_storage.write_manager_action(
@@ -393,6 +597,7 @@ def api_manager_bullet_action(bullet_hash: str, action: str):
     body = request.get_json(silent=True) or {}
     bullet_text = (body.get("bullet_text") or "").strip()
     section = (body.get("section") or "").strip()
+    model_hint = (body.get("model_hint") or "").strip()
     if not bullet_text:
         return jsonify({"error": "missing 'bullet_text'"}), 400
 
@@ -404,7 +609,7 @@ def api_manager_bullet_action(bullet_hash: str, action: str):
     )
     async_runner.submit(
         _run_manager_action_in_background,
-        bullet_hash, action, bullet_text, section, running_ts,
+        bullet_hash, action, bullet_text, section, running_ts, model_hint,
     )
     return jsonify({
         "ok": True,
@@ -424,6 +629,7 @@ def _run_draft_poc_in_background(
     wt,
     project_cwd: str,
     running_ts: str,
+    model_hint: str = "",
 ) -> None:
     """Background worker for manager-originated Draft PoC.
 
@@ -439,7 +645,6 @@ def _run_draft_poc_in_background(
             mode="manager-l2", status="failed",
             error="inference_router not installed",
             worktree_path=str(wt.path), branch=wt.branch,
-            ts=None,  # new ts since the running row has the same key
         )
         worktree_manager.discard(wt)
         return
@@ -488,6 +693,7 @@ def _run_draft_poc_in_background(
             allowed_tools=["Read", "Grep", "Glob", "Write", "Edit"],
             cwd=project_cwd,
             write_scope=str(wt.path),
+            model_hint=model_hint or None,
         )
     except Exception as e:
         log.exception("draft-poc dispatch failed for %s: %s", project_id, e)
@@ -496,7 +702,6 @@ def _run_draft_poc_in_background(
             mode="manager-l2", status="failed",
             error=f"{type(e).__name__}: {e}",
             worktree_path=str(wt.path), branch=wt.branch,
-            ts=None,
         )
         worktree_manager.discard(wt)
         return
@@ -516,7 +721,6 @@ def _run_draft_poc_in_background(
         provider_used=result.provider,
         latency_ms=result.latency_ms,
         cost_usd=result.cost_usd,
-        ts=None,
     )
 
 
@@ -533,6 +737,7 @@ def api_manager_draft_poc(bullet_hash: str, project_id: str):
     """
     body = request.get_json(silent=True) or {}
     bullet_text = (body.get("bullet_text") or "").strip()
+    model_hint = (body.get("model_hint") or "").strip()
     if not bullet_text:
         return jsonify({"error": "missing 'bullet_text'"}), 400
 
@@ -565,7 +770,8 @@ def api_manager_draft_poc(bullet_hash: str, project_id: str):
     )
     async_runner.submit(
         _run_draft_poc_in_background,
-        bullet_hash, bullet_text, project_id, project, wt, str(project_cwd), running_ts,
+        bullet_hash, bullet_text, project_id, project, wt, str(project_cwd),
+        running_ts, model_hint,
     )
 
     return jsonify({
@@ -591,11 +797,13 @@ def api_project_detail(project_id: str):
     next_steps = projects_storage.latest(project_id)
     investigations = projects_storage.investigations_for_project(project_id)
     proposals = projects_storage.proposals_for_project(project_id)
+    verifications = projects_storage.verifications_for_project(project_id)
     return jsonify({
         "status": _status_to_dict(status),
         "next_steps": next_steps,
         "investigations": investigations,
         "proposals": proposals,
+        "verifications": verifications,
         "project_yaml": {k: v for k, v in project.items() if k != "description"},
     })
 
@@ -824,6 +1032,7 @@ def api_propose(project_id: str):
 
     auto_applied = False
     apply_message = ""
+    verification_dict: Optional[dict] = None
     if mode == "l3":
         if not files_changed:
             # Nothing changed — discard the worktree and mark as applied no-op.
@@ -834,28 +1043,51 @@ def api_propose(project_id: str):
             )
             auto_applied = True
             apply_message = "no-op: agent made no edits"
-        elif confidence == "HIGH":
-            ok, msg = worktree_manager.apply_to_main(wt)
-            if ok:
-                worktree_manager.discard(wt)
-                projects_storage.update_proposal_status(
-                    project_id, bullet_hash, ts,
-                    status="applied", clear_worktree=True,
-                )
-                auto_applied = True
-                apply_message = msg
-            else:
-                projects_storage.update_proposal_status(
-                    project_id, bullet_hash, ts,
-                    status="pending",  # left for manual review
-                    error=msg,
-                )
-                apply_message = f"auto-apply failed, left pending: {msg}"
         else:
-            apply_message = (
-                f"L3 declined to auto-apply because confidence={confidence!r}; "
-                "left pending for manual review"
+            # Run the auto-ship verifier against the actual diff. The agent's
+            # self-reported confidence is necessary but not sufficient — the
+            # verifier inspects what was actually changed.
+            v = verifier.verify(wt.path, files_changed)
+            projects_storage.write_verification(
+                project_id, bullet_hash, ts,
+                tier=v.tier, status=v.status, summary=v.summary,
+                evidence=v.evidence, latency_ms=v.latency_ms,
+                blocked_apply=v.blocked_apply,
             )
+            verification_dict = v.to_dict()
+
+            if v.blocked_apply:
+                projects_storage.update_proposal_status(
+                    project_id, bullet_hash, ts,
+                    status="pending",
+                    error=f"verifier({v.tier})={v.status}: {v.summary}",
+                )
+                apply_message = (
+                    f"verifier blocked auto-apply ({v.tier} → {v.status}): "
+                    f"{v.summary}"
+                )
+            elif confidence != "HIGH":
+                apply_message = (
+                    f"L3 declined to auto-apply because confidence={confidence!r}; "
+                    "left pending for manual review"
+                )
+            else:
+                ok, msg = worktree_manager.apply_to_main(wt)
+                if ok:
+                    worktree_manager.discard(wt)
+                    projects_storage.update_proposal_status(
+                        project_id, bullet_hash, ts,
+                        status="applied", clear_worktree=True,
+                    )
+                    auto_applied = True
+                    apply_message = f"{msg}; verifier: {v.summary}"
+                else:
+                    projects_storage.update_proposal_status(
+                        project_id, bullet_hash, ts,
+                        status="pending",
+                        error=msg,
+                    )
+                    apply_message = f"auto-apply failed, left pending: {msg}"
 
     return jsonify({
         "ok": True,
@@ -870,6 +1102,7 @@ def api_propose(project_id: str):
         "confidence": confidence,
         "auto_applied": auto_applied,
         "apply_message": apply_message,
+        "verification": verification_dict,
         "provider": result.provider,
         "model": result.model,
         "latency_ms": result.latency_ms,
@@ -1140,3 +1373,47 @@ def _routing_summary() -> dict:
         return router_log.histogram_24h()
     except ImportError:
         return {}
+
+
+# ---------------------------------------------------------------------------
+# Skill launcher — fires `claude -p` headless with a templated prompt and
+# logs each run to skill_run. Backed by skills.yaml; LAN-only via the
+# blueprint's before_request gate.
+# ---------------------------------------------------------------------------
+
+@utilization_bp.get("/api/skills")
+def api_skills_list():
+    """Curated skill list for the launcher panel, grouped by domain on the
+    client side."""
+    skills = [s.to_public() for s in skills_runner.load_skills()]
+    return jsonify({"skills": skills})
+
+
+@utilization_bp.post("/api/skills/run")
+def api_skills_run():
+    """Start a headless skill run. Body: {"skill_id": "...", "input": "..."}.
+    Returns 202 with the run_id; client polls /api/skills/runs/<id>."""
+    body = request.get_json(silent=True) or {}
+    skill_id = (body.get("skill_id") or "").strip()
+    user_input = (body.get("input") or "")
+    if not skill_id:
+        return jsonify({"error": "missing 'skill_id'"}), 400
+    try:
+        result = skills_runner.start_run(skill_id, user_input)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify(result), 202
+
+
+@utilization_bp.get("/api/skills/runs/<run_id>")
+def api_skills_run_get(run_id: str):
+    run = skills_runner.get_run(run_id)
+    if run is None:
+        return jsonify({"error": "run not found"}), 404
+    return jsonify(run)
+
+
+@utilization_bp.get("/api/skills/runs")
+def api_skills_runs_list():
+    limit = int(request.args.get("limit", 25))
+    return jsonify({"runs": skills_runner.list_runs(limit=limit)})

@@ -117,6 +117,22 @@ CREATE TABLE IF NOT EXISTS project_proposal (
 CREATE INDEX IF NOT EXISTS idx_pp_project_bullet
     ON project_proposal (project_id, bullet_hash, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_pp_status ON project_proposal (status);
+
+CREATE TABLE IF NOT EXISTS proposal_verification (
+    project_id      TEXT NOT NULL,
+    bullet_hash     TEXT NOT NULL,
+    proposal_ts     TEXT NOT NULL,         -- joins to project_proposal.ts
+    ts              TEXT NOT NULL,         -- when the verifier ran
+    tier            TEXT NOT NULL,         -- v1_smoke | v2_unit | v3_service | v4_ui | v5_schema
+    status          TEXT NOT NULL,         -- pass | fail | skip | block
+    summary         TEXT,                  -- one-line badge text
+    evidence        TEXT,                  -- JSON blob with structured detail
+    latency_ms      INTEGER,
+    blocked_apply   INTEGER NOT NULL DEFAULT 0,  -- 0/1 — was L3 auto-merge blocked
+    PRIMARY KEY (project_id, bullet_hash, proposal_ts)
+);
+CREATE INDEX IF NOT EXISTS idx_pv_project_bullet
+    ON proposal_verification (project_id, bullet_hash, ts DESC);
 """
 
 
@@ -124,6 +140,15 @@ def _init() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _conn() as db:
         db.executescript(_SCHEMA)
+        # Idempotent column adds for tables that gained columns post-creation.
+        # SQLite errors if the column already exists; we swallow that case.
+        for sql in (
+            "ALTER TABLE manager_brief ADD COLUMN prompt TEXT",
+        ):
+            try:
+                db.execute(sql)
+            except sqlite3.OperationalError:
+                pass  # column already exists
 
 
 @contextmanager
@@ -297,14 +322,33 @@ def update_user_idea(
 
 def list_user_ideas(limit: int = 50) -> list[dict]:
     """Return user-submitted ideas, newest first. Successful ones expose the
-    Opus-produced bullet and section so the UI can fold them into the brief."""
+    Opus-produced bullet and section so the UI can fold them into the brief.
+
+    Excludes rows the user dismissed (status='dismissed') so an old failed
+    submission doesn't permanently haunt the dashboard.
+    """
     _init()
     with _conn() as db:
         rows = db.execute(
-            "SELECT * FROM user_idea ORDER BY ts DESC LIMIT ?",
+            "SELECT * FROM user_idea "
+            "WHERE status != 'dismissed' "
+            "ORDER BY ts DESC LIMIT ?",
             (limit,),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def dismiss_user_idea(idea_id: int) -> bool:
+    """Mark a user_idea row as dismissed so list_user_ideas hides it.
+    Returns True if a row was updated.
+    """
+    _init()
+    with _conn() as db:
+        cur = db.execute(
+            "UPDATE user_idea SET status='dismissed' WHERE id=? AND status != 'dismissed'",
+            (idea_id,),
+        )
+        return cur.rowcount > 0
 
 
 def write_manager_action(
@@ -408,6 +452,7 @@ def write_manager_brief(
     cost_usd: float = 0.0,
     projects_in_bundle: Optional[list[str]] = None,
     bundle_chars: int = 0,
+    prompt: str = "",
 ) -> str:
     _init()
     ts = _now_iso()
@@ -415,14 +460,21 @@ def write_manager_brief(
         db.execute(
             "INSERT OR REPLACE INTO manager_brief "
             "(ts, content, model_used, provider_used, latency_ms, cost_usd, "
-            " projects_in_bundle, bundle_chars) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            " projects_in_bundle, bundle_chars, prompt) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (ts, content, model_used, provider_used, latency_ms, cost_usd,
-             json.dumps(projects_in_bundle or []), bundle_chars),
+             json.dumps(projects_in_bundle or []), bundle_chars, prompt),
         )
     return ts
 
 
-def latest_manager_brief() -> Optional[dict]:
+def latest_manager_brief(*, include_prompt: bool = False) -> Optional[dict]:
+    """Return the most recent manager brief, optionally including the
+    full prompt that produced it (for the 'show prompt' UI footer).
+
+    The prompt is excluded by default because briefs are large (10-20k chars)
+    and the polling endpoint runs every ~30s.
+    """
     _init()
     with _conn() as db:
         row = db.execute(
@@ -436,6 +488,8 @@ def latest_manager_brief() -> Optional[dict]:
             d["projects_in_bundle"] = json.loads(d["projects_in_bundle"])
         except json.JSONDecodeError:
             pass
+    if not include_prompt:
+        d.pop("prompt", None)
     return d
 
 
@@ -582,4 +636,98 @@ def latest_all() -> dict[str, dict]:
             except json.JSONDecodeError:
                 pass
         out[d["project_id"]] = d
+    return out
+
+
+# ---------------------------------------------------------------------------
+# proposal_verification — written by verifier.py before L3 merges
+# ---------------------------------------------------------------------------
+
+
+def write_verification(
+    project_id: str,
+    bullet_hash: str,
+    proposal_ts: str,
+    *,
+    tier: str,
+    status: str,
+    summary: str = "",
+    evidence: Optional[dict] = None,
+    latency_ms: int = 0,
+    blocked_apply: bool = False,
+) -> str:
+    _init()
+    ts = _now_iso()
+    with _conn() as db:
+        db.execute(
+            "INSERT OR REPLACE INTO proposal_verification "
+            "(project_id, bullet_hash, proposal_ts, ts, tier, status, "
+            " summary, evidence, latency_ms, blocked_apply) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (project_id, bullet_hash, proposal_ts, ts, tier, status,
+             summary, json.dumps(evidence or {}), latency_ms,
+             1 if blocked_apply else 0),
+        )
+    return ts
+
+
+def latest_verification(
+    project_id: str, bullet_hash: str, proposal_ts: Optional[str] = None,
+) -> Optional[dict]:
+    """Most recent verification row for a (project, bullet) — optionally
+    pinned to a specific proposal_ts."""
+    _init()
+    with _conn() as db:
+        if proposal_ts is not None:
+            row = db.execute(
+                "SELECT * FROM proposal_verification "
+                "WHERE project_id=? AND bullet_hash=? AND proposal_ts=? "
+                "ORDER BY ts DESC LIMIT 1",
+                (project_id, bullet_hash, proposal_ts),
+            ).fetchone()
+        else:
+            row = db.execute(
+                "SELECT * FROM proposal_verification "
+                "WHERE project_id=? AND bullet_hash=? "
+                "ORDER BY ts DESC LIMIT 1",
+                (project_id, bullet_hash),
+            ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    if d.get("evidence"):
+        try:
+            d["evidence"] = json.loads(d["evidence"])
+        except json.JSONDecodeError:
+            pass
+    d["blocked_apply"] = bool(d.get("blocked_apply"))
+    return d
+
+
+def verifications_for_project(project_id: str) -> dict[str, dict]:
+    """Return {bullet_hash: latest_verification_row} for the project."""
+    _init()
+    with _conn() as db:
+        rows = db.execute(
+            "SELECT pv.* FROM proposal_verification pv "
+            "INNER JOIN ("
+            "  SELECT project_id, bullet_hash, MAX(ts) AS max_ts "
+            "  FROM proposal_verification WHERE project_id=? "
+            "  GROUP BY project_id, bullet_hash"
+            ") latest "
+            "  ON pv.project_id=latest.project_id "
+            " AND pv.bullet_hash=latest.bullet_hash "
+            " AND pv.ts=latest.max_ts",
+            (project_id,),
+        ).fetchall()
+    out: dict[str, dict] = {}
+    for r in rows:
+        d = dict(r)
+        if d.get("evidence"):
+            try:
+                d["evidence"] = json.loads(d["evidence"])
+            except json.JSONDecodeError:
+                pass
+        d["blocked_apply"] = bool(d.get("blocked_apply"))
+        out[d["bullet_hash"]] = d
     return out

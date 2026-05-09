@@ -1,0 +1,90 @@
+# Curated skill launcher for the utilization dashboard.
+#
+# Each entry becomes a clickable card on the home page. Clicking spawns a
+# headless `claude -p` subprocess scoped to the cwd you specify, with the
+# prompt_template rendered against the user's input.
+#
+# Fields:
+#   id               stable identifier, used in URLs and the run table
+#   name             card title (short)
+#   domain           grouping (Clinical, Payroll, Infra, Marketing, ...)
+#   description      one-line subtitle on the card
+#   prompt_template  text passed to `claude -p`. Use {input} for the field
+#                    the user types in. If the template contains no {input}
+#                    placeholder, the card runs with no input box.
+#   requires_input   if true, Run is disabled until input is non-empty
+#   input_label      placeholder for the input field
+#   cwd              working directory for the subprocess. Skills usually
+#                    need this to be the project root so relative paths
+#                    and project-local skills resolve.
+#   timeout_sec      hard cap (default 600)
+#   model            optional --model flag (e.g. "sonnet", "opus")
+#
+# Add or remove freely; the dashboard re-reads this file on every request.
+
+skills:
+
+  - id: payroll-processor
+    name: Payroll Processor
+    domain: Payroll
+    description: Pull timecards, calculate hours with CA daily OT, and fill the payroll worksheet.
+    prompt_template: |
+      Use the payroll-processor skill to process payroll for the pay period: {input}.
+      Pull timecard data via the OpenDental MCP, audit anomalies, and produce the
+      payroll worksheet. Report the final XLSX path and a summary of anomalies.
+    requires_input: true
+    input_label: 'Pay period (e.g. "March 16-29, 2026" or "last")'
+    cwd: C:\Users\Administrator\Desktop\Cursor\OpenDentalMCP
+    timeout_sec: 1200
+
+  - id: master-user-query
+    name: New Patient List
+    domain: Marketing
+    description: Generate the monthly Master User Query mail-merge workbook for new patients.
+    prompt_template: |
+      Use the master-user-query skill to generate the new-patient mail-merge
+      workbook for: {input}. Produce the .xlsx in the standard output folder
+      and report the final path plus the row count.
+    requires_input: true
+    input_label: 'Month (e.g. "April 2026")'
+    cwd: C:\Users\Administrator\Desktop\Cursor\OpenDentalMCP
+    timeout_sec: 900
+
+  - id: tp-regression
+    name: Treatment Plan Regression
+    domain: Clinical
+    description: Validate Open Dental treatment plan procedure behavior end-to-end.
+    prompt_template: |
+      Run the opendental-treatment-plan-regression skill end-to-end. Report
+      pass/fail per case and any deviations from expected behavior.
+    requires_input: false
+    cwd: C:\Users\Administrator\Desktop\Cursor\OpenDentalMCP
+    timeout_sec: 900
+
+  - id: mcp-triage
+    name: MCP Service Triage
+    domain: Infra
+    description: Diagnose runtime mismatches between code on disk and live MCP behavior.
+    prompt_template: |
+      Use the mcp-service-runtime-triage skill to investigate this symptom: {input}.
+      Identify which service is actually serving the request, whether the code on
+      disk matches the running process, and recommend the smallest fix.
+    requires_input: true
+    input_label: 'Symptom (e.g. "create_treatment_plan returns 500")'
+    cwd: C:\Users\Administrator\Desktop\Cursor\OpenDentalMCP
+    timeout_sec: 600
+
+  - id: nssm-status
+    name: MCP Health Check
+    domain: Infra
+    description: Read-only — service status, log tail, and endpoint check across the MCP fleet.
+    prompt_template: |
+      Use the windows-nssm-mcp-operations skill in READ-ONLY mode. Do not restart
+      anything. Report:
+        1. Status of each NSSM-managed MCP service
+        2. Last 20 log lines per service (only those with errors or warnings)
+        3. Health-check endpoint result for each public tunnel
+      End with a one-line overall verdict.
+    requires_input: false
+    cwd: C:\Users\Administrator\Desktop\Cursor\OpenDentalMCP
+    timeout_sec: 600

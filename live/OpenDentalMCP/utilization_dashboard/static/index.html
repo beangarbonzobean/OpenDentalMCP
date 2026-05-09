@@ -81,6 +81,34 @@ header button.refresh:disabled { opacity: 0.5; cursor: wait; }
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
+.inline-refresh {
+  display: inline-block;
+  background: var(--accent);
+  color: white;
+  border: 1px solid var(--accent);
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  margin-left: 8px;
+  cursor: pointer;
+  text-decoration: none;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+}
+.inline-refresh:hover { background: #1f6feb; border-color: #1f6feb; }
+.inline-refresh.copied { background: var(--good); border-color: var(--good); }
+.refresh-hint.flash { animation: flash-bg 1.5s ease-out; }
+@keyframes flash-bg {
+  0%   { background: rgba(47, 129, 247, 0.25); border-color: var(--accent); }
+  100% { background: var(--panel); border-color: var(--panel-border); }
+}
+/* Help cursor for any element with a tooltip */
+[title] { cursor: help; }
+button[title], a[title], .inline-refresh[title] { cursor: pointer; }
+.unknown-val { color: var(--text-dim); font-style: italic; }
+.error-val { color: var(--bad); }
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
@@ -202,6 +230,170 @@ header button.refresh:disabled { opacity: 0.5; cursor: wait; }
   border-radius: 3px;
   font-size: 11px;
 }
+
+/* Automation card */
+.tag.ops { background: rgba(47, 129, 247, 0.15); color: var(--accent); border: 1px solid rgba(47, 129, 247, 0.4); }
+.am-overall { font-size: 22px; font-weight: 600; letter-spacing: 0.04em; margin: 4px 0; }
+.am-overall.healthy   { color: var(--good); }
+.am-overall.degraded  { color: var(--warn); }
+.am-overall.down      { color: var(--bad); }
+.am-counts { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--text-dim); margin-bottom: 6px; }
+.am-counts strong { font-variant-numeric: tabular-nums; color: var(--text); }
+.am-counts .c-down    strong { color: var(--bad); }
+.am-counts .c-stale   strong { color: var(--warn); }
+.am-counts .c-unknown strong { color: var(--sunk); }
+.am-toggle {
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  margin-top: 4px;
+}
+.am-toggle:hover { color: var(--text); border-color: var(--text-dim); }
+.am-list { display: none; margin-top: 8px; max-height: 360px; overflow-y: auto; }
+.am-list.open { display: block; }
+.am-row {
+  display: grid;
+  grid-template-columns: 14px 1fr auto;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.am-row:last-child { border-bottom: none; }
+.am-state-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; }
+.am-state-dot.healthy   { background: var(--good); }
+.am-state-dot.stale     { background: var(--warn); }
+.am-state-dot.down      { background: var(--bad); }
+.am-state-dot.unknown   { background: var(--sunk); }
+.am-row .am-name   { font-weight: 600; color: var(--text); }
+.am-row .am-detail { color: var(--text-dim); font-size: 11px; }
+.am-row .am-kind   { color: var(--text-dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; }
+
+/* Skill launcher */
+.skills-card { grid-column: 1 / -1; }
+.skill-domain-h { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; margin: 14px 0 6px; }
+.skill-domain-h:first-of-type { margin-top: 4px; }
+.skill-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.skill-tile {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  transition: border-color 0.15s, background 0.15s;
+}
+.skill-tile:hover { border-color: var(--accent); background: rgba(47, 129, 247, 0.06); }
+.skill-tile-name { font-weight: 600; font-size: 13px; margin-bottom: 2px; }
+.skill-tile-desc { font-size: 11px; color: var(--text-dim); line-height: 1.35; }
+
+.skill-modal-bg {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 9000;
+  display: none; align-items: flex-start; justify-content: center; padding: 60px 20px;
+}
+.skill-modal-bg.open { display: flex; }
+.skill-modal {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  width: 100%;
+  max-width: 760px;
+  max-height: calc(100vh - 120px);
+  display: flex; flex-direction: column;
+}
+.skill-modal-head {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--panel-border);
+  display: flex; align-items: baseline; gap: 12px;
+}
+.skill-modal-head h3 { margin: 0; font-size: 15px; }
+.skill-modal-head .domain-tag { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; }
+.skill-modal-head .close { margin-left: auto; background: transparent; border: none; color: var(--text-dim); font-size: 22px; cursor: pointer; line-height: 1; padding: 0 4px; }
+.skill-modal-head .close:hover { color: var(--text); }
+.skill-modal-body { padding: 14px 18px; overflow-y: auto; flex: 1; }
+.skill-modal-body .desc { color: var(--text-dim); font-size: 12px; margin-bottom: 12px; }
+.skill-modal-body label { display: block; font-size: 11px; color: var(--text-dim); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.04em; }
+.skill-modal-body input.skill-input {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--panel-border);
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+.skill-modal-body input.skill-input:focus { outline: none; border-color: var(--accent); }
+.skill-modal-foot {
+  padding: 10px 18px;
+  border-top: 1px solid var(--panel-border);
+  display: flex; gap: 8px; align-items: center;
+}
+.skill-modal-foot .status { color: var(--text-dim); font-size: 12px; flex: 1; }
+.skill-modal-foot .status.ok { color: var(--good); }
+.skill-modal-foot .status.failed { color: var(--bad); }
+.skill-modal-foot .status.timeout { color: var(--warn); }
+.skill-modal-foot button {
+  background: var(--accent);
+  color: white;
+  border: none;
+  padding: 7px 16px;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.skill-modal-foot button:hover { background: #1f6feb; }
+.skill-modal-foot button:disabled { opacity: 0.5; cursor: not-allowed; }
+.skill-output {
+  background: var(--bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  padding: 12px;
+  font-family: ui-monospace, Menlo, "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+  min-height: 80px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+.skill-output.empty { color: var(--text-dim); font-style: italic; }
+.skill-history { margin-top: 18px; border-top: 1px solid var(--panel-border); padding-top: 12px; }
+.skill-history-head { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
+.skill-history-row {
+  display: grid;
+  grid-template-columns: 8px 1fr 1fr auto auto;
+  gap: 10px;
+  padding: 4px 0;
+  font-size: 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  cursor: pointer;
+}
+.skill-history-row:last-child { border-bottom: none; }
+.skill-history-row:hover { background: rgba(255,255,255,0.03); }
+.skill-history-row .dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; }
+.skill-history-row .dot.ok { background: var(--good); }
+.skill-history-row .dot.failed { background: var(--bad); }
+.skill-history-row .dot.timeout { background: var(--warn); }
+.skill-history-row .dot.running { background: var(--accent); }
+.skill-history-row .input { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skill-history-row .ago { color: var(--text-dim); font-size: 11px; }
+.am-error {
+  color: var(--bad);
+  font-size: 12px;
+  margin-top: 6px;
+}
 </style>
 </head>
 <body>
@@ -217,7 +409,7 @@ header button.refresh:disabled { opacity: 0.5; cursor: wait; }
 
 <div class="grid">
   <div class="card" id="card-claude-session">
-    <h2>Claude Max — Current Session <span class="tag prepaid">PRE-PAID · perishable</span></h2>
+    <h2>Claude Max — Current Session <span class="tag prepaid" title="Pre-paid quota that resets per session — use it or lose it. Drain this before billable APIs.">PRE-PAID · perishable</span></h2>
     <div class="big" id="claude-session-pct">—</div>
     <div class="bar"><div class="fill" id="claude-session-fill" style="width:0%"></div></div>
     <div class="row"><span class="label">Resets in</span><span class="value" id="claude-session-resets">—</span></div>
@@ -225,18 +417,22 @@ header button.refresh:disabled { opacity: 0.5; cursor: wait; }
   </div>
 
   <div class="card" id="card-claude-weekly">
-    <h2>Claude Max — Weekly Caps <span class="tag prepaid">PRE-PAID</span></h2>
+    <h2>Claude Max — Weekly Caps <span class="tag prepaid" title="Pre-paid quota with weekly caps. Resets every Tuesday at 3 PM.">PRE-PAID</span></h2>
     <div class="row"><span class="label">All models</span><span class="value" id="claude-weekly-all">—</span></div>
     <div class="bar"><div class="fill" id="claude-weekly-all-fill" style="width:0%"></div></div>
     <div class="row"><span class="label">Sonnet only</span><span class="value" id="claude-weekly-sonnet">—</span></div>
     <div class="bar"><div class="fill" id="claude-weekly-sonnet-fill" style="width:0%"></div></div>
     <div class="row"><span class="label">Claude Design</span><span class="value" id="claude-weekly-design">—</span></div>
     <div class="bar"><div class="fill" id="claude-weekly-design-fill" style="width:0%"></div></div>
+    <div class="row"><span class="label" title="Dedicated Opus weekly bucket. Independent of the All-models bucket — Opus on Max counts here, NOT against All models.">Opus only</span><span class="value" id="claude-weekly-opus">—</span></div>
+    <div class="bar"><div class="fill" id="claude-weekly-opus-fill" style="width:0%"></div></div>
+    <div class="row"><span class="label" title="Claude Code background routines (Cowork). Scheduled tasks like the claude-usage-scrape one consume from this bucket.">Cowork</span><span class="value" id="claude-weekly-cowork">—</span></div>
+    <div class="bar"><div class="fill" id="claude-weekly-cowork-fill" style="width:0%"></div></div>
     <div class="note dim" id="claude-weekly-resets"></div>
   </div>
 
   <div class="card" id="card-api-spend">
-    <h2>Anthropic API — Extra Usage <span class="tag billable">BILLABLE</span></h2>
+    <h2>Anthropic API — Extra Usage <span class="tag billable" title="Pay-as-you-go. Each request hits the credit-card. Use only when pre-paid quotas are drained.">BILLABLE</span></h2>
     <div class="row"><span class="label">Spent this month</span><span class="value" id="api-spent">—</span></div>
     <div class="bar"><div class="fill" id="api-fill" style="width:0%"></div></div>
     <div class="row"><span class="label">Cap</span><span class="value" id="api-cap">—</span></div>
@@ -245,7 +441,7 @@ header button.refresh:disabled { opacity: 0.5; cursor: wait; }
   </div>
 
   <div class="card" id="card-gpu">
-    <h2>Local GPU — Ollama <span class="tag sunk">SUNK COST</span></h2>
+    <h2>Local GPU — Ollama <span class="tag sunk" title="Hardware already paid for. Free to use; cap is utilization not budget.">SUNK COST</span></h2>
     <div class="row"><span class="label">SM utilization</span><span class="value" id="gpu-sm">—</span></div>
     <div class="bar"><div class="fill" id="gpu-sm-fill" style="width:0%"></div></div>
     <div class="row"><span class="label">VRAM</span><span class="value" id="gpu-vram">—</span></div>
@@ -260,9 +456,9 @@ header button.refresh:disabled { opacity: 0.5; cursor: wait; }
     <h2>Inference Router (last 24h)</h2>
     <div class="row"><span class="label">Total routed</span><span class="value" id="routing-total">—</span></div>
     <div class="row"><span class="label">Cost (24h)</span><span class="value" id="routing-cost">—</span></div>
-    <div class="note">Where work actually went</div>
+    <div class="note" title="Which provider/backend each routed request actually ran on (after fallbacks).">Where work actually went</div>
     <div class="kv" id="routing-actuals"></div>
-    <div class="note">Burn-mode at decision time</div>
+    <div class="note" title="Router's spending mode when each request was dispatched. 'aggressive' = drain pre-paid quota first; 'conservative' = preserve quota; 'idle' = no traffic.">Burn-mode at decision time</div>
     <div class="kv" id="routing-burn-modes"></div>
   </div>
 
@@ -277,18 +473,108 @@ header button.refresh:disabled { opacity: 0.5; cursor: wait; }
     <div class="note">Model mix (24h)</div>
     <div class="kv" id="pipeline-models"></div>
   </div>
+
+  <div class="card skills-card" id="card-skills">
+    <h2>Skills <span class="tag ops" title="One-click skill launcher. Click a tile to run a curated skill via headless `claude -p`. Output streams back when done.">LAUNCHER</span></h2>
+    <div id="skills-body">
+      <div class="dim" id="skills-empty">Loading skills…</div>
+    </div>
+    <div class="skill-history" id="skills-history-wrap" style="display:none;">
+      <div class="skill-history-head">Recent runs</div>
+      <div id="skills-history"></div>
+    </div>
+  </div>
+
+  <div class="card" id="card-automation">
+    <h2>Automation Monitor <span class="tag ops" title="Services and scheduled tasks that should keep running. Source: AutomationMonitorService on port 8089.">OPS</span></h2>
+    <div class="am-overall" id="am-overall">—</div>
+    <div class="am-counts">
+      <span class="c-healthy">healthy <strong id="am-c-healthy">—</strong></span>
+      <span class="c-stale">stale <strong id="am-c-stale">—</strong></span>
+      <span class="c-down">down <strong id="am-c-down">—</strong></span>
+      <span class="c-unknown">unknown <strong id="am-c-unknown">—</strong></span>
+    </div>
+    <div class="small dim" id="am-last-checked">last checked —</div>
+    <button class="am-toggle" type="button" id="am-toggle">▸ Show all</button>
+    <div class="am-list" id="am-list"></div>
+    <div class="am-error" id="am-error" style="display:none;"></div>
+  </div>
+</div>
+
+<div class="skill-modal-bg" id="skill-modal-bg" role="dialog" aria-modal="true">
+  <div class="skill-modal">
+    <div class="skill-modal-head">
+      <h3 id="skill-modal-name">—</h3>
+      <span class="domain-tag" id="skill-modal-domain">—</span>
+      <button type="button" class="close" id="skill-modal-close" aria-label="Close">×</button>
+    </div>
+    <div class="skill-modal-body">
+      <div class="desc" id="skill-modal-desc">—</div>
+      <div id="skill-input-wrap">
+        <label for="skill-input">Input</label>
+        <input id="skill-input" class="skill-input" type="text" placeholder="">
+      </div>
+      <label>Output</label>
+      <div id="skill-output" class="skill-output empty">No output yet — click Run.</div>
+    </div>
+    <div class="skill-modal-foot">
+      <span id="skill-status" class="status">Ready</span>
+      <button type="button" id="skill-run-btn">Run</button>
+    </div>
+  </div>
 </div>
 
 <div class="refresh-hint" id="hint">
   <strong>Refresh Claude usage in one click:</strong>
   drag this <a class="bookmarklet" id="bookmarklet" href="#" onclick="event.preventDefault();alert('Drag this link to your bookmarks bar instead of clicking it here. Then click the bookmark while on claude.ai/settings/usage.')">Refresh Claude</a>
-  to your bookmarks bar. Click it whenever you're on <a href="https://claude.ai/settings/usage" target="_blank"><code>claude.ai/settings/usage</code></a> and it'll POST the scrape back to this dashboard automatically.
+  to your bookmarks bar. Click it whenever you're on <a href="https://claude.ai/settings/usage" target="_blank"><code>claude.ai/settings/usage</code></a>; it'll open a new tab on this dashboard with the latest usage already ingested.
   Alt: ask the assistant "scrape claude usage."
 </div>
 
 <script>
 function pct(v) { return (v == null) ? '—' : v.toFixed(0) + '%'; }
 function fmtUsd(v) { return (v == null) ? '—' : '$' + Number(v).toFixed(2); }
+// Render a USD amount with semantic null-handling.
+//   undefined / null      -> gray italic em-dash, title "value not yet fetched"
+//   number (incl. 0)      -> "$X.XX"
+//   {error: "..."}        -> red em-dash, title from error
+function setUsdField(id, v) {
+  const e = document.getElementById(id);
+  if (!e) return;
+  e.classList.remove('unknown-val', 'error-val');
+  e.removeAttribute('title');
+  if (v && typeof v === 'object' && v.error) {
+    e.textContent = '—';
+    e.classList.add('error-val');
+    e.title = 'failed to fetch: ' + v.error;
+  } else if (v == null) {
+    e.textContent = '—';
+    e.classList.add('unknown-val');
+    e.title = 'value not yet fetched';
+  } else {
+    e.textContent = '$' + Number(v).toFixed(2);
+  }
+}
+// Same idea for unitless / percent / text fields.
+function setSemanticField(id, v, fmt, opts) {
+  const e = document.getElementById(id);
+  if (!e) return;
+  e.classList.remove('unknown-val', 'error-val');
+  e.removeAttribute('title');
+  opts = opts || {};
+  if (v && typeof v === 'object' && v.error) {
+    e.textContent = '—';
+    e.classList.add('error-val');
+    e.title = 'failed to fetch: ' + v.error;
+  } else if (v == null || v === '') {
+    e.textContent = '—';
+    e.classList.add('unknown-val');
+    e.title = opts.unknownTitle || 'value not yet fetched';
+  } else {
+    e.textContent = fmt ? fmt(v) : v;
+    if (opts.title) e.title = opts.title;
+  }
+}
 function setBar(id, v, idleThreshold = 30) {
   const fill = document.getElementById(id);
   if (!fill) return;
@@ -329,61 +615,184 @@ async function refresh() {
     // Compute scrape age and surface a STALE badge after 5 min so the user
     // knows when to click the bookmarklet (or ask the assistant).
     const claudeStale = c.ts && (Date.now() - new Date(c.ts).getTime()) > 5 * 60 * 1000;
-    const noteText = c.ts
-      ? 'plan: ' + (c.plan || '?') + ' · scraped ' + fmtAge(c.ts)
-      : 'no scrape yet — drag the Refresh Claude bookmarklet, or ask the assistant';
-    setText('claude-session-note', noteText);
     const noteEl = document.getElementById('claude-session-note');
     if (noteEl) {
-      // Remove any prior badge then maybe re-add
-      noteEl.querySelectorAll('.stale-warn').forEach(b => b.remove());
-      if (claudeStale) {
+      noteEl.innerHTML = '';
+      if (c.ts) {
+        const planSpan = document.createElement('span');
+        const planVal = c.plan || '?';
+        planSpan.textContent = 'plan: ' + planVal;
+        planSpan.title = (planVal === '?')
+          ? "Plan name couldn't be detected from the scrape. Make sure the bookmarklet was clicked while signed in to claude.ai/settings/usage."
+          : 'Detected plan tier from the most recent scrape.';
+        noteEl.appendChild(planSpan);
+        noteEl.appendChild(document.createTextNode(' · scraped ' + fmtAge(c.ts)));
+      } else {
+        noteEl.appendChild(document.createTextNode('no scrape yet — click ↻ Refresh now, drag the Refresh Claude bookmarklet, or ask the assistant'));
+      }
+      if (claudeStale || !c.ts) {
         const badge = document.createElement('span');
         badge.className = 'stale-warn';
+        badge.title = c.ts
+          ? 'Last scrape is older than 5 minutes. Click ↻ Refresh now to update.'
+          : 'No scrape recorded yet. Click ↻ Refresh now to fetch.';
         badge.textContent = 'STALE';
         noteEl.appendChild(badge);
+        // Inline "Refresh now" action — addresses the immediate "fix stale"
+        // need without forcing the manager to scroll to the bookmarklet
+        // banner. Opens claude.ai/settings/usage in a new tab AND highlights
+        // the bookmarklet hint so the manager remembers to click the
+        // bookmarklet on that page.
+        const btn = document.createElement('a');
+        btn.className = 'inline-refresh';
+        btn.id = 'claude-inline-refresh';
+        btn.href = 'https://claude.ai/settings/usage';
+        btn.target = '_blank';
+        btn.rel = 'noopener noreferrer';
+        btn.textContent = '↻ Refresh Claude usage';
+        btn.title = 'Copies the "Refresh Claude" bookmarklet to your clipboard AND opens claude.ai/settings/usage in a new tab. Once on that page, paste into the URL bar (or click the bookmarklet if you already dragged it to your bookmarks bar).';
+        btn.addEventListener('click', (ev) => {
+          // Try to copy the bookmarklet payload to clipboard alongside the
+          // new-tab navigation. If clipboard write fails (permissions, old
+          // browser), the user still gets the tab — fallback path is the
+          // bottom banner.
+          const bookmarkletLink = document.getElementById('bookmarklet');
+          const payload = bookmarkletLink ? bookmarkletLink.getAttribute('href') : null;
+          if (payload && navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(payload).then(() => {
+              btn.classList.add('copied');
+              const orig = btn.textContent;
+              btn.textContent = '✓ Bookmarklet copied — paste in the new tab';
+              setTimeout(() => {
+                btn.classList.remove('copied');
+                btn.textContent = orig;
+              }, 3500);
+            }).catch(() => { /* silent — tab still opens */ });
+          }
+          const hint = document.getElementById('hint');
+          if (hint) {
+            hint.classList.remove('flash');
+            void hint.offsetWidth;
+            hint.classList.add('flash');
+          }
+        });
+        noteEl.appendChild(btn);
       }
     }
 
-    // Claude weekly
-    setText('claude-weekly-all', pct(c.weekly_all_pct));
+    // Claude weekly — use semantic renderer so unknown (gray italic) is
+    // visually distinguishable from a real 0% (regular text).
+    setSemanticField('claude-weekly-all', c.weekly_all_pct, v => v.toFixed(0) + '%',
+      {unknownTitle: 'Weekly all-models cap not yet scraped from claude.ai'});
     setBar('claude-weekly-all-fill', c.weekly_all_pct);
-    setText('claude-weekly-sonnet', pct(c.weekly_sonnet_pct));
+    setSemanticField('claude-weekly-sonnet', c.weekly_sonnet_pct, v => v.toFixed(0) + '%',
+      {unknownTitle: 'Weekly Sonnet cap not yet scraped from claude.ai'});
     setBar('claude-weekly-sonnet-fill', c.weekly_sonnet_pct);
-    setText('claude-weekly-design', pct(c.weekly_design_pct));
+    setSemanticField('claude-weekly-design', c.weekly_design_pct, v => v.toFixed(0) + '%',
+      {unknownTitle: 'Claude Design weekly cap not yet scraped from claude.ai'});
     setBar('claude-weekly-design-fill', c.weekly_design_pct);
+    setSemanticField('claude-weekly-opus', c.weekly_opus_pct, v => v.toFixed(0) + '%',
+      {unknownTitle: 'Opus weekly bucket — null on plans without Opus access; otherwise scraped from claude.ai.'});
+    setBar('claude-weekly-opus-fill', c.weekly_opus_pct);
+    setSemanticField('claude-weekly-cowork', c.weekly_cowork_pct, v => v.toFixed(0) + '%',
+      {unknownTitle: 'Cowork weekly bucket — null on plans without Cowork; otherwise scraped from claude.ai.'});
+    setBar('claude-weekly-cowork-fill', c.weekly_cowork_pct);
     setText('claude-weekly-resets', c.weekly_resets_at_text ? 'resets ' + c.weekly_resets_at_text : '');
 
     // Idle alerts (pre-paid weekly < 10% used means it's about to expire unused)
-    document.getElementById('card-claude-weekly').classList.toggle(
-      'alert-idle',
-      c.weekly_all_pct != null && c.weekly_all_pct < 10
-    );
+    const weeklyCard = document.getElementById('card-claude-weekly');
+    const weeklyIdle = c.weekly_all_pct != null && c.weekly_all_pct < 10;
+    weeklyCard.classList.toggle('alert-idle', weeklyIdle);
+    const weeklyH2 = weeklyCard.querySelector('h2');
+    if (weeklyH2) {
+      weeklyH2.title = weeklyIdle
+        ? 'IDLE: Resource is healthy but barely in use. Pre-paid weekly cap is <10% consumed and resets soon — capacity is at risk of expiring unused.'
+        : '';
+    }
 
-    // API spend
-    setText('api-spent', fmtUsd(c.api_extra_spent_usd));
-    setText('api-cap', fmtUsd(c.api_extra_cap_usd));
-    setText('api-balance', fmtUsd(c.api_extra_balance_usd));
+    // API spend — use semantic null-handling so the manager can tell unknown
+    // (gray italic) from actual zero (black) from fetch error (red).
+    setUsdField('api-spent', c.api_extra_spent_usd != null ? c.api_extra_spent_usd : (c.api_extra_error ? {error: c.api_extra_error} : null));
+    setUsdField('api-cap', c.api_extra_cap_usd != null ? c.api_extra_cap_usd : (c.api_extra_error ? {error: c.api_extra_error} : null));
+    setUsdField('api-balance', c.api_extra_balance_usd != null ? c.api_extra_balance_usd : (c.api_extra_error ? {error: c.api_extra_error} : null));
     setBar('api-fill', c.api_extra_pct);
     setText('api-resets', c.api_extra_resets_text ? 'resets ' + c.api_extra_resets_text : '');
 
     // GPU
     const g = data.gpu || {};
     if (g.error) {
-      setText('gpu-sm', 'unreachable');
+      // Whole-poller failure — render distinguishable error states.
+      setSemanticField('gpu-sm', {error: g.error}, null,
+        {unknownTitle: 'GPU poller unreachable'});
+      setSemanticField('gpu-vram', {error: g.error}, null);
+      setSemanticField('gpu-power', {error: g.error}, null);
       setText('gpu-source', g.error);
     } else {
-      setText('gpu-sm', g.sm_pct != null ? g.sm_pct + '%' : 'n/a');
+      // If GPU is idle (no models loaded), append "(idle)" to n/a so the
+      // manager knows it's a normal idle state, not a fetch failure.
+      const idleSuffix = (!(g.loaded_models || []).length) ? ' (idle)' : '';
+      const smEl = document.getElementById('gpu-sm');
+      if (smEl) {
+        smEl.classList.remove('unknown-val', 'error-val');
+        smEl.removeAttribute('title');
+        if (g.sm_pct != null) {
+          smEl.textContent = g.sm_pct + '%';
+        } else {
+          smEl.textContent = 'n/a' + idleSuffix;
+          smEl.classList.add('unknown-val');
+          smEl.title = idleSuffix
+            ? 'GPU is idle — no models loaded, so SM utilization is meaningless.'
+            : 'SM utilization not reported by this poller (try the nvidia-smi source).';
+        }
+      }
       setBar('gpu-sm-fill', g.sm_pct);
-      const vramStr = (g.vram_used_mb && g.vram_total_mb)
-        ? `${(g.vram_used_mb / 1024).toFixed(1)} / ${(g.vram_total_mb / 1024).toFixed(1)} GiB`
-        : (g.vram_used_mb ? `${(g.vram_used_mb / 1024).toFixed(1)} GiB` : 'n/a');
-      setText('gpu-vram', vramStr);
+      const vramEl = document.getElementById('gpu-vram');
+      if (vramEl) {
+        vramEl.classList.remove('unknown-val', 'error-val');
+        vramEl.removeAttribute('title');
+        if (g.vram_used_mb && g.vram_total_mb) {
+          vramEl.textContent = `${(g.vram_used_mb / 1024).toFixed(1)} / ${(g.vram_total_mb / 1024).toFixed(1)} GiB`;
+        } else if (g.vram_used_mb) {
+          vramEl.textContent = `${(g.vram_used_mb / 1024).toFixed(1)} GiB`;
+        } else {
+          vramEl.textContent = 'n/a' + idleSuffix;
+          vramEl.classList.add('unknown-val');
+          vramEl.title = idleSuffix
+            ? 'GPU is idle — no models loaded, so no VRAM in use.'
+            : 'VRAM total not reported.';
+        }
+      }
       const vramPct = (g.vram_used_mb && g.vram_total_mb)
         ? 100 * g.vram_used_mb / g.vram_total_mb : null;
       setBar('gpu-vram-fill', vramPct);
-      setText('gpu-power', g.power_w != null ? g.power_w + ' W' : 'n/a');
-      setText('gpu-source', 'source: ' + (g.source || '?'));
+      const powerEl = document.getElementById('gpu-power');
+      if (powerEl) {
+        powerEl.classList.remove('unknown-val', 'error-val');
+        powerEl.removeAttribute('title');
+        if (g.power_w != null) {
+          powerEl.textContent = g.power_w + ' W';
+        } else {
+          powerEl.textContent = 'n/a' + idleSuffix;
+          powerEl.classList.add('unknown-val');
+          powerEl.title = idleSuffix
+            ? 'GPU is idle — power draw not polled.'
+            : 'Power telemetry not available from this source.';
+        }
+      }
+      const srcEl = document.getElementById('gpu-source');
+      if (srcEl) {
+        const srcVal = g.source || '?';
+        srcEl.textContent = 'source: ' + srcVal;
+        if (srcVal === 'ollama-only') {
+          srcEl.title = 'GPU stats are coming from the Ollama HTTP API only (no nvidia-smi). VRAM and loaded-model data are accurate; SM utilization may be approximate.';
+        } else if (srcVal === '?' || srcVal === 'unknown') {
+          srcEl.title = "GPU stat source couldn't be determined. The poller may be misconfigured.";
+        } else if (srcVal.indexOf('nvidia-smi') !== -1) {
+          srcEl.title = 'GPU stats include nvidia-smi telemetry — full SM%/VRAM/power detail.';
+        } else {
+          srcEl.title = 'Origin of the GPU telemetry shown above.';
+        }
+      }
       const mTbl = document.getElementById('gpu-models');
       mTbl.innerHTML = '';
       (g.loaded_models || []).forEach(m => {
@@ -393,16 +802,24 @@ async function refresh() {
         mTbl.appendChild(k); mTbl.appendChild(v);
       });
       if (!(g.loaded_models || []).length) {
-        const k = document.createElement('div'); k.className = 'dim'; k.textContent = '(none loaded)';
+        const k = document.createElement('div');
+        k.className = 'unknown-val';
+        k.textContent = '(none loaded — GPU is idle)';
+        k.title = 'No Ollama models are currently resident in VRAM. The GPU will warm up when the next inference request lands.';
         mTbl.appendChild(k);
       }
     }
 
     // GPU idle alert (sunk cost — flag when SM is low + nothing loaded)
-    document.getElementById('card-gpu').classList.toggle(
-      'alert-idle',
-      ((g.sm_pct == null || g.sm_pct < 10) && !(g.loaded_models || []).length)
-    );
+    const gpuCard = document.getElementById('card-gpu');
+    const gpuIdle = ((g.sm_pct == null || g.sm_pct < 10) && !(g.loaded_models || []).length);
+    gpuCard.classList.toggle('alert-idle', gpuIdle);
+    const gpuH2 = gpuCard.querySelector('h2');
+    if (gpuH2) {
+      gpuH2.title = gpuIdle
+        ? 'IDLE: GPU is healthy but not in use right now. SM utilization is low and no Ollama models are loaded — sunk-cost capacity sitting unused.'
+        : '';
+    }
 
     // Routing
     const rt = data.routing || {};
@@ -429,13 +846,23 @@ async function refresh() {
       bmTbl.appendChild(k); bmTbl.appendChild(v);
     });
 
-    // Pipeline
+    // Pipeline — semantic renderer so 0 docs (genuine zero) is visually
+    // distinct from "haven't fetched yet" (gray italic).
     const p = data.pipeline || {};
-    setText('pipeline-rows-24h', p.rows_last_24h != null ? p.rows_last_24h : '—');
-    setText('pipeline-rows-hour', p.rows_last_hour != null ? p.rows_last_hour : '—');
-    setText('pipeline-total', p.total_rows != null ? p.total_rows.toLocaleString() : '—');
-    setText('pipeline-haiku', fmtUsd(p.haiku_spend_24h_usd));
-    setText('pipeline-running', p.rebuild_running ? 'yes' : 'no');
+    setSemanticField('pipeline-rows-24h', p.rows_last_24h, null,
+      {unknownTitle: 'OCR pipeline counts not yet polled'});
+    setSemanticField('pipeline-rows-hour', p.rows_last_hour, null,
+      {unknownTitle: 'OCR pipeline counts not yet polled'});
+    setSemanticField('pipeline-total', p.total_rows, v => v.toLocaleString(),
+      {unknownTitle: 'Pipeline cache total not yet polled'});
+    setUsdField('pipeline-haiku', p.haiku_spend_24h_usd);
+    const runEl = document.getElementById('pipeline-running');
+    if (runEl) {
+      runEl.textContent = p.rebuild_running ? 'yes' : 'no';
+      runEl.title = p.rebuild_running
+        ? 'A full OCR rebuild is currently running on the document index.'
+        : 'No rebuild in progress; pipeline is in normal incremental mode.';
+    }
     const pTbl = document.getElementById('pipeline-models');
     pTbl.innerHTML = '';
     Object.entries(p.models_24h || {}).forEach(([model, n]) => {
@@ -451,6 +878,83 @@ async function refresh() {
   }
 }
 
+// ---------- Automation Monitor card ----------
+async function refreshAutomation() {
+  const overallEl = document.getElementById('am-overall');
+  const errEl = document.getElementById('am-error');
+  const listEl = document.getElementById('am-list');
+  try {
+    const r = await fetch('/utilization/api/automation/health', { cache: 'no-store' });
+    if (!r.ok) {
+      const body = await r.text();
+      throw new Error('HTTP ' + r.status + ': ' + body.slice(0, 200));
+    }
+    const data = await r.json();
+    if (data.error) throw new Error(data.error);
+
+    const summary = data.summary || {};
+    const overall = summary.overall || 'unknown';
+    overallEl.textContent = overall.toUpperCase();
+    overallEl.className = 'am-overall ' + overall;
+
+    const counts = summary.counts || {};
+    setText('am-c-healthy', counts.healthy ?? 0);
+    setText('am-c-stale',   counts.stale   ?? 0);
+    setText('am-c-down',    counts.down    ?? 0);
+    setText('am-c-unknown', counts.unknown ?? 0);
+
+    if (summary.checked_at_pt) {
+      const t = new Date(summary.checked_at_pt);
+      setText('am-last-checked',
+        'last checked ' + t.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})
+        + '  ·  ' + (summary.total ?? '?') + ' total');
+    }
+
+    // Render the per-entry list. Sort: down → stale → unknown → healthy,
+    // then alphabetically. So if you expand the card, problems are at the top.
+    const order = { down: 0, stale: 1, unknown: 2, healthy: 3 };
+    const entries = (data.entries || []).slice().sort((a, b) => {
+      const oa = order[a.state] ?? 9, ob = order[b.state] ?? 9;
+      if (oa !== ob) return oa - ob;
+      return a.name.localeCompare(b.name);
+    });
+    listEl.innerHTML = '';
+    for (const e of entries) {
+      const row = document.createElement('div');
+      row.className = 'am-row';
+      row.title = e.detail || '';
+      const dot = document.createElement('div');
+      dot.className = 'am-state-dot ' + (e.state || 'unknown');
+      const meta = document.createElement('div');
+      const name = document.createElement('div'); name.className = 'am-name'; name.textContent = e.name;
+      const detail = document.createElement('div'); detail.className = 'am-detail'; detail.textContent = e.detail || '';
+      meta.appendChild(name); meta.appendChild(detail);
+      const kind = document.createElement('div'); kind.className = 'am-kind'; kind.textContent = e.kind || '';
+      row.appendChild(dot); row.appendChild(meta); row.appendChild(kind);
+      listEl.appendChild(row);
+    }
+
+    errEl.style.display = 'none';
+  } catch (e) {
+    console.error('automation fetch failed:', e);
+    overallEl.textContent = 'ERR';
+    overallEl.className = 'am-overall down';
+    errEl.textContent = 'fetch failed: ' + e.message;
+    errEl.style.display = 'block';
+  }
+}
+
+// Toggle expand/collapse of the per-entry list
+(function wireAutomationToggle() {
+  const btn = document.getElementById('am-toggle');
+  const list = document.getElementById('am-list');
+  if (!btn || !list) return;
+  btn.addEventListener('click', () => {
+    const isOpen = list.classList.toggle('open');
+    btn.textContent = isOpen ? '▾ Hide all' : '▸ Show all';
+  });
+})();
+
 // Wire up the manual refresh button
 const refreshBtn = document.getElementById('btn-refresh');
 if (refreshBtn) {
@@ -465,19 +969,17 @@ if (refreshBtn) {
   });
 }
 
-// Build the bookmarklet href with this page's origin baked in, so the
-// fetch goes to the dashboard regardless of what page the bookmarklet
-// is clicked from. The bookmarklet itself runs in the OTHER page's
-// context (claude.ai), so it can't compute the dashboard origin at
-// click time — we hardcode it now.
-//
-// Strategy: hit the same JSON API the page itself uses (more robust
-// than scraping rendered text). We auto-discover the org with
-// claude_max capability so this works for any user.
+// Build the bookmarklet. The bookmarklet runs in claude.ai's context
+// (HTTPS) and the dashboard is on LAN HTTP — Chrome's mixed-content policy
+// blocks HTTPS→HTTP fetch(), so we can't POST directly. Workaround: do the
+// claude.ai API calls in the bookmarklet, encode the payload into a URL
+// hash, and open a new tab to the dashboard. The dashboard's hash-ingest
+// handler (further down in this script) decodes the hash and POSTs to its
+// own same-origin endpoint — no mixed content, no CORS.
 (function buildBookmarklet() {
   const link = document.getElementById('bookmarklet');
   if (!link) return;
-  const target = window.location.origin + '/utilization/api/claude-snapshot-json';
+  const target = window.location.origin + '/utilization/?ingest=1';
   const code =
     "(async function(){" +
       "try{" +
@@ -487,23 +989,266 @@ if (refreshBtn) {
         "var u=await fetch('/api/organizations/'+org.uuid+'/usage',{credentials:'include'}).then(r=>r.json());" +
         "var p=null;" +
         "try{p=await fetch('/api/organizations/'+org.uuid+'/prepaid/credits',{credentials:'include'}).then(r=>r.json())}catch(e){}" +
-        "var res=await fetch(" + JSON.stringify(target) + ",{" +
-          "method:'POST'," +
-          "headers:{'Content-Type':'application/json'}," +
-          "body:JSON.stringify({usage:u,prepaid_credits:p})" +
-        "}).then(r=>r.json());" +
-        "var n=document.createElement('div');" +
-        "n.style.cssText='position:fixed;top:20px;right:20px;background:#161b22;color:#e6edf3;border:1px solid #30363d;padding:10px 16px;border-radius:6px;font:14px sans-serif;z-index:99999';" +
-        "n.textContent='Dashboard updated - '+(res.fields_parsed||[]).length+' fields';" +
-        "document.body.appendChild(n);" +
-        "setTimeout(function(){n.remove()},2500)" +
+        "var payload=encodeURIComponent(JSON.stringify({usage:u,prepaid_credits:p}));" +
+        "window.open(" + JSON.stringify(target) + "+'#'+payload,'_blank')" +
       "}catch(e){alert('Refresh failed: '+(e&&e.message||e))}" +
     "})()";
   link.href = 'javascript:' + encodeURI(code);
 })();
 
+// Hash-ingest handler: when the dashboard loads with ?ingest=1 and a
+// non-empty hash, decode the payload and POST it to our same-origin
+// /api/claude-snapshot-json. This is the dashboard side of the bookmarklet
+// flow; it bypasses Chrome's HTTPS→HTTP mixed-content block.
+(async function ingestFromHash() {
+  if (!window.location.search.includes('ingest=1')) return;
+  const hash = window.location.hash.replace(/^#/, '');
+  if (!hash) return;
+  let payload;
+  try {
+    payload = JSON.parse(decodeURIComponent(hash));
+  } catch (e) {
+    document.title = 'Utilization — ingest payload malformed';
+    return;
+  }
+  // Wipe the hash + query so a refresh doesn't re-ingest, before the POST
+  // so a slow POST doesn't leave the URL dirty if the user closes the tab.
+  history.replaceState(null, '', '/utilization/');
+  try {
+    const r = await fetch('/utilization/api/claude-snapshot-json', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const res = await r.json();
+    if (!r.ok) throw new Error(res.error || ('HTTP ' + r.status));
+    const note = document.createElement('div');
+    note.style.cssText = 'position:fixed;top:20px;right:20px;background:#161b22;color:#e6edf3;border:1px solid #30363d;padding:10px 16px;border-radius:6px;font:14px sans-serif;z-index:99999';
+    note.textContent = 'Dashboard updated — ' + (res.fields_parsed || []).length + ' fields';
+    document.body.appendChild(note);
+    setTimeout(() => note.remove(), 3000);
+    // Trigger the regular refresh so the cards reflect the new data
+    if (typeof refresh === 'function') refresh();
+  } catch (e) {
+    const note = document.createElement('div');
+    note.style.cssText = 'position:fixed;top:20px;right:20px;background:#3a1418;color:#f85149;border:1px solid #f85149;padding:10px 16px;border-radius:6px;font:14px sans-serif;z-index:99999';
+    note.textContent = 'Ingest failed: ' + (e.message || e);
+    document.body.appendChild(note);
+    setTimeout(() => note.remove(), 6000);
+  }
+})();
+
 refresh();
 setInterval(refresh, 10000);
+
+// Automation health is independent of the snapshot fetch and lighter on
+// the server side (sc.exe / schtasks.exe); poll on its own 30s cadence.
+refreshAutomation();
+setInterval(refreshAutomation, 30000);
+
+// ---------------------------------------------------------------------------
+// Skill launcher
+// ---------------------------------------------------------------------------
+let SKILL_CACHE = [];
+let CURRENT_SKILL = null;
+let CURRENT_RUN_ID = null;
+let RUN_POLL_TIMER = null;
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function formatAgo(iso) {
+  if (!iso) return '';
+  const t = new Date(iso).getTime();
+  if (isNaN(t)) return '';
+  const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.floor(s / 60) + 'm ago';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+  return Math.floor(s / 86400) + 'd ago';
+}
+
+async function loadSkills() {
+  try {
+    const r = await fetch('/utilization/api/skills');
+    const j = await r.json();
+    SKILL_CACHE = j.skills || [];
+    renderSkillsBody();
+    refreshSkillHistory();
+  } catch (e) {
+    document.getElementById('skills-empty').textContent = 'Failed to load skills: ' + e.message;
+  }
+}
+
+function renderSkillsBody() {
+  const body = document.getElementById('skills-body');
+  if (!SKILL_CACHE.length) {
+    body.innerHTML = '<div class="dim">No skills configured. Edit <code>skills.yaml</code> to add some.</div>';
+    return;
+  }
+  const byDomain = new Map();
+  for (const s of SKILL_CACHE) {
+    if (!byDomain.has(s.domain)) byDomain.set(s.domain, []);
+    byDomain.get(s.domain).push(s);
+  }
+  let html = '';
+  for (const [domain, skills] of byDomain) {
+    html += '<div class="skill-domain-h">' + escapeHtml(domain) + '</div><div class="skill-grid">';
+    for (const s of skills) {
+      html += '<button type="button" class="skill-tile" data-skill-id="'
+        + escapeHtml(s.id) + '">'
+        + '<div class="skill-tile-name">' + escapeHtml(s.name) + '</div>'
+        + '<div class="skill-tile-desc">' + escapeHtml(s.description) + '</div>'
+        + '</button>';
+    }
+    html += '</div>';
+  }
+  body.innerHTML = html;
+  body.querySelectorAll('.skill-tile').forEach(btn => {
+    btn.addEventListener('click', () => openSkillModal(btn.dataset.skillId));
+  });
+}
+
+function openSkillModal(skillId, prefilledRunId) {
+  const skill = SKILL_CACHE.find(s => s.id === skillId);
+  if (!skill) return;
+  CURRENT_SKILL = skill;
+  CURRENT_RUN_ID = prefilledRunId || null;
+  document.getElementById('skill-modal-name').textContent = skill.name;
+  document.getElementById('skill-modal-domain').textContent = skill.domain;
+  document.getElementById('skill-modal-desc').textContent = skill.description || '';
+  const inputWrap = document.getElementById('skill-input-wrap');
+  const inputEl = document.getElementById('skill-input');
+  if (skill.has_input_placeholder) {
+    inputWrap.style.display = '';
+    inputEl.placeholder = skill.input_label || 'Input';
+    inputEl.value = '';
+    setTimeout(() => inputEl.focus(), 50);
+  } else {
+    inputWrap.style.display = 'none';
+  }
+  setSkillStatus('Ready', '');
+  setSkillOutput('No output yet — click Run.', true);
+  document.getElementById('skill-run-btn').disabled = false;
+  document.getElementById('skill-modal-bg').classList.add('open');
+  if (prefilledRunId) {
+    document.getElementById('skill-run-btn').disabled = true;
+    setSkillStatus('Loading…', '');
+    pollRun(prefilledRunId);
+  }
+}
+
+function closeSkillModal() {
+  document.getElementById('skill-modal-bg').classList.remove('open');
+  if (RUN_POLL_TIMER) { clearTimeout(RUN_POLL_TIMER); RUN_POLL_TIMER = null; }
+  CURRENT_RUN_ID = null;
+  CURRENT_SKILL = null;
+  refreshSkillHistory();
+}
+
+function setSkillStatus(text, cls) {
+  const el = document.getElementById('skill-status');
+  el.textContent = text;
+  el.className = 'status' + (cls ? ' ' + cls : '');
+}
+
+function setSkillOutput(text, empty) {
+  const el = document.getElementById('skill-output');
+  el.textContent = text;
+  el.classList.toggle('empty', !!empty);
+}
+
+async function runCurrentSkill() {
+  if (!CURRENT_SKILL) return;
+  const btn = document.getElementById('skill-run-btn');
+  const inputEl = document.getElementById('skill-input');
+  const userInput = inputEl ? inputEl.value : '';
+  btn.disabled = true;
+  setSkillStatus('Dispatching…', '');
+  setSkillOutput('Waiting on Claude…', true);
+  try {
+    const r = await fetch('/utilization/api/skills/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ skill_id: CURRENT_SKILL.id, input: userInput }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    CURRENT_RUN_ID = j.run_id;
+    setSkillStatus('Running…', '');
+    pollRun(j.run_id);
+  } catch (e) {
+    setSkillStatus('Error: ' + e.message, 'failed');
+    btn.disabled = false;
+  }
+}
+
+async function pollRun(runId) {
+  try {
+    const r = await fetch('/utilization/api/skills/runs/' + encodeURIComponent(runId));
+    const run = await r.json();
+    if (!r.ok) throw new Error(run.error || ('HTTP ' + r.status));
+    const out = run.output_text || run.stderr_text || '';
+    if (out) setSkillOutput(out, false); else setSkillOutput('Waiting on Claude…', true);
+    if (run.status === 'running') {
+      setSkillStatus('Running… ' + formatAgo(run.started_ts), '');
+      RUN_POLL_TIMER = setTimeout(() => pollRun(runId), 2000);
+    } else {
+      const latency = run.latency_ms ? (' · ' + (run.latency_ms / 1000).toFixed(1) + 's') : '';
+      setSkillStatus(run.status.toUpperCase() + latency, run.status);
+      document.getElementById('skill-run-btn').disabled = false;
+      refreshSkillHistory();
+    }
+  } catch (e) {
+    setSkillStatus('Error: ' + e.message, 'failed');
+    document.getElementById('skill-run-btn').disabled = false;
+  }
+}
+
+async function refreshSkillHistory() {
+  try {
+    const r = await fetch('/utilization/api/skills/runs?limit=10');
+    const j = await r.json();
+    const runs = j.runs || [];
+    const wrap = document.getElementById('skills-history-wrap');
+    const list = document.getElementById('skills-history');
+    if (!runs.length) { wrap.style.display = 'none'; return; }
+    wrap.style.display = '';
+    list.innerHTML = runs.map(rn =>
+      '<div class="skill-history-row" data-skill-id="' + escapeHtml(rn.skill_id)
+        + '" data-run-id="' + escapeHtml(rn.id) + '">'
+        + '<div class="dot ' + escapeHtml(rn.status) + '"></div>'
+        + '<div>' + escapeHtml(rn.skill_name) + '</div>'
+        + '<div class="input">' + escapeHtml(rn.input_text || '—') + '</div>'
+        + '<div class="ago">' + escapeHtml(formatAgo(rn.started_ts)) + '</div>'
+        + '<div class="dim">' + (rn.latency_ms ? (rn.latency_ms / 1000).toFixed(1) + 's' : '—') + '</div>'
+      + '</div>'
+    ).join('');
+    list.querySelectorAll('.skill-history-row').forEach(row => {
+      row.addEventListener('click', () => openSkillModal(row.dataset.skillId, row.dataset.runId));
+    });
+  } catch (e) { /* ignore */ }
+}
+
+document.getElementById('skill-modal-close').addEventListener('click', closeSkillModal);
+document.getElementById('skill-modal-bg').addEventListener('click', (e) => {
+  if (e.target.id === 'skill-modal-bg') closeSkillModal();
+});
+document.getElementById('skill-run-btn').addEventListener('click', runCurrentSkill);
+document.getElementById('skill-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') runCurrentSkill();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.getElementById('skill-modal-bg').classList.contains('open')) {
+    closeSkillModal();
+  }
+});
+
+loadSkills();
+setInterval(refreshSkillHistory, 30000);
 </script>
 </body>
 </html>

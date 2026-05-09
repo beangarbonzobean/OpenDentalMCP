@@ -114,3 +114,61 @@ projects:
       - repo:MODULE_SPLIT_PLAN.md
       - memory:project_miyo_calibration
       - memory:project_miyo_team
+
+  - id: auto_ship_verifier
+    name: Auto-ship Verifier
+    domain: Dashboard
+    phase: in_progress
+    description: |
+      Adaptive pre-merge test harness for L3 auto-apply. Runs against the
+      proposal worktree before the merge fires; tier is picked from the
+      diff (docs / Python / service / UI / schema). Currently:
+        V1_SMOKE   secret regex + balanced markdown fences      (shipped)
+        V2_UNIT    py_compile + ruff (E,F) + nearby pytest -x   (shipped)
+        V3_SERVICE V2 + start service in worktree on free port  (TODO)
+        V4_UI      Playwright render + console-error scan       (TODO)
+        V5_SCHEMA  always block, force manual review            (shipped)
+      Verdict gates the existing HIGH-confidence check — both must agree
+      before apply_to_main runs. Evidence stored in proposal_verification
+      and rendered as a pill below each bullet on this page.
+    repo_path: live/OpenDentalMCP/utilization_dashboard
+    health:
+      service: null  # runs in-process inside the dashboard
+      log_path: live/OpenDentalMCP/utilization_dashboard/mcp_server_http.log
+      log_stale_after_hours: 24
+    notes_sources:
+      - repo:verifier.py
+      - repo:routes.py
+      - repo:projects_storage.py
+      - repo:static/project_detail.html
+
+  - id: chart_audit_backlog
+    name: Chart Audit Backlog Burndown
+    domain: OpenDental
+    phase: in_progress
+    description: |
+      Burning down the 879-task chart-audit backlog (missing clinical notes,
+      missing perio charts, unknown exam doctor). Two-track plan:
+        Phase A — auto-resolve unknown_exam_doc tasks where appt+billed
+                  providers agree on a known doctor (~125 of 159 mechanical).
+                  Script: scripts/auto_resolve_unknown_exam_doc.py.
+        Phase B — self-improving drafter for missing_note (currently 49/353
+                  drafted). Pilot batch ~15-20 across template families,
+                  feedback loop in dashboard (toggle implicit-edit-diff vs
+                  thumbs+comment), templates for hygiene/exam, Claude SDK
+                  few-shot for restorative/surgical (D2740/D2393/D7210/...).
+        Phase C — perio-from-route-slip extractor for the 367 missing_perio
+                  pile (not started).
+      Lives inside the OpenDentalMCP service; no separate process.
+    repo_path: live/OpenDentalMCP
+    health:
+      service: null
+      log_path: live/OpenDentalMCP/mcp_server_http.log
+      log_stale_after_hours: 24
+    notes_sources:
+      - repo:chart_audit_backlog/README.md
+      - repo:chart_audit_backlog/auto_resolve_unknown_exam_doc.py
+      - repo:chart_audit_backlog/select_pilot_batch.py
+      - repo:chart_audit_routes.py
+      - repo:scripts/draft_pending_notes.py
+      - repo:scripts/nightly_draft_pending_notes.ps1
