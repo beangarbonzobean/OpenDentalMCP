@@ -125,7 +125,7 @@ projects:
       diff (docs / Python / service / UI / schema). Currently:
         V1_SMOKE   secret regex + balanced markdown fences      (shipped)
         V2_UNIT    py_compile + ruff (E,F) + nearby pytest -x   (shipped)
-        V3_SERVICE V2 + start service in worktree on free port  (TODO)
+        V3_SERVICE V2 + standalone runner on free port + /healthz (shipped)
         V4_UI      Playwright render + console-error scan       (TODO)
         V5_SCHEMA  always block, force manual review            (shipped)
       Verdict gates the existing HIGH-confidence check — both must agree

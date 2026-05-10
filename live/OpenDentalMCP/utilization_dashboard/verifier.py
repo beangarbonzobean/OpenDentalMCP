@@ -9,8 +9,9 @@ Tiers (highest tier triggered by any changed file wins):
     V1_SMOKE    docs / text only            secret regex + markdown sanity
     V2_UNIT     any *.py touched            py_compile + ruff (best-effort)
                                             + pytest near touched files
-    V3_SERVICE  routes / blueprint code     V2 + (TODO) start service in
-                                            worktree on free port, hit /healthz
+    V3_SERVICE  routes / blueprint code     V2 + start the utilization
+                                            dashboard in the worktree on a
+                                            free port and hit /healthz
     V4_UI       static html|css|js          V3 + (TODO) playwright render
     V5_SCHEMA   migrations / requirements   block auto-apply, force pending
 
@@ -24,9 +25,13 @@ from __future__ import annotations
 import json
 import logging
 import re
+import socket
 import subprocess
 import sys
+import tempfile
 import time
+import urllib.error
+import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -290,19 +295,157 @@ def _v2_unit(wt_path: Path, files: list[str]) -> Verification:
     )
 
 
+def _free_port() -> int:
+    """Ask the OS for an unused TCP port. There's a small race between
+    releasing the socket and the child process binding it, but for a single
+    short-lived smoke test that's acceptable."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _service_smoke(pkg_dir: Path, timeout_s: float = 12.0) -> tuple[str, dict, bool]:
+    """Spawn the utilization dashboard standalone runner in `pkg_dir` on a
+    free port, poll /utilization/healthz until it answers, then tear down.
+
+    Returns (one-line summary, evidence dict, ok bool).
+    `ok` is True only if /healthz returned 200 with {"ok": true, ...}.
+    """
+    port = _free_port()
+    url = f"http://127.0.0.1:{port}/utilization/healthz"
+    cmd = [
+        sys.executable, "-m", "utilization_dashboard.standalone",
+        "--host", "127.0.0.1",
+        "--port", str(port),
+    ]
+    evidence: dict = {"port": port, "url": url, "cwd": str(pkg_dir)}
+
+    # Capture output to a tempfile so a chatty server can't deadlock by
+    # filling a pipe buffer we never read.
+    log_fh = tempfile.TemporaryFile()
+    proc: Optional[subprocess.Popen] = None
+    summary = ""
+    ok = False
+    try:
+        try:
+            proc = subprocess.Popen(
+                cmd, cwd=pkg_dir, stdout=log_fh, stderr=subprocess.STDOUT,
+            )
+        except OSError as e:
+            return f"failed to spawn service: {e}", evidence, False
+
+        deadline = time.monotonic() + timeout_s
+        last_err = ""
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                summary = f"service exited early rc={proc.returncode}"
+                break
+            try:
+                with urllib.request.urlopen(url, timeout=1.0) as resp:
+                    body = resp.read()
+                    evidence["status"] = resp.status
+                    evidence["body"] = body.decode("utf-8", errors="replace")[:400]
+                    payload = None
+                    try:
+                        payload = json.loads(body)
+                    except json.JSONDecodeError:
+                        pass
+                    if (resp.status == 200
+                            and isinstance(payload, dict)
+                            and payload.get("ok") is True):
+                        summary = f"healthz 200 ok ({payload.get('service','?')})"
+                        ok = True
+                    else:
+                        summary = f"healthz {resp.status} body unexpected"
+                    break
+            except (urllib.error.URLError, ConnectionError, OSError) as e:
+                last_err = f"{type(e).__name__}: {e}"
+                time.sleep(0.25)
+        else:
+            summary = f"timeout waiting for /healthz ({last_err})"
+            evidence["last_error"] = last_err
+    finally:
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                try:
+                    proc.wait(timeout=2.0)
+                except subprocess.TimeoutExpired:
+                    pass
+        # Always grab a tail of the service log for diagnostics.
+        try:
+            log_fh.seek(0)
+            log_text = log_fh.read().decode("utf-8", errors="replace")
+            evidence["stdout_tail"] = log_text[-800:]
+        finally:
+            log_fh.close()
+
+    return summary, evidence, ok
+
+
 def _v3_service(wt_path: Path, files: list[str]) -> Verification:
-    """V3 adds an in-worktree service smoke. Not yet implemented — falls back
-    to V2 for now and records that V3 was deferred so the UI can show it."""
+    """V3 = V2 + start the utilization dashboard in the worktree on a free
+    port and probe /healthz.
+
+    The smoke is scoped to changes that touch the utilization_dashboard
+    package — that's the only service whose entry point we know
+    (utilization_dashboard.standalone). For other service-shaped paths
+    (mcp_server*.py, generic app.py) we still run V2 and record that the
+    smoke didn't apply rather than blocking ship.
+    """
     v2 = _v2_unit(wt_path, files)
+
+    pkg_dir = wt_path / "live" / "OpenDentalMCP"
+    standalone_py = pkg_dir / "utilization_dashboard" / "standalone.py"
+    touches_dashboard = any(
+        "utilization_dashboard" in f.replace("\\", "/") for f in files
+    )
+
+    if v2.status == "fail":
+        # Don't bother spinning up a service if the unit tier already failed.
+        return Verification(
+            tier=V3_SERVICE,
+            status="fail",
+            summary="V3 service: V2 failed → " + v2.summary,
+            evidence={
+                "v2_inner": v2.evidence,
+                "service_smoke": {"skipped": "V2 failed"},
+            },
+            blocked_apply=v2.blocked_apply,
+        )
+
+    if not standalone_py.exists() or not touches_dashboard:
+        return Verification(
+            tier=V3_SERVICE,
+            status=v2.status,
+            summary="V3 service: V2-only (smoke not in scope) — " + v2.summary,
+            evidence={
+                "v2_inner": v2.evidence,
+                "service_smoke": {
+                    "skipped": "no utilization_dashboard runner or files out of scope",
+                    "standalone_present": standalone_py.exists(),
+                    "touches_dashboard": touches_dashboard,
+                },
+            },
+            blocked_apply=v2.blocked_apply,
+        )
+
+    smoke_summary, smoke_evidence, smoke_ok = _service_smoke(pkg_dir)
+    status = "pass" if smoke_ok else "fail"
+    summary = (
+        f"V3 service: {smoke_summary}; {v2.summary}"
+        if smoke_ok
+        else f"V3 service: smoke failed — {smoke_summary}"
+    )
     return Verification(
         tier=V3_SERVICE,
-        status=v2.status,
-        summary="V3 service (V2-only, service-start TODO): " + v2.summary,
-        evidence={
-            "v2_inner": v2.evidence,
-            "todo": "Start service in worktree on free port + hit /healthz",
-        },
-        blocked_apply=v2.blocked_apply,
+        status=status,
+        summary=summary,
+        evidence={"v2_inner": v2.evidence, "service_smoke": smoke_evidence},
+        blocked_apply=v2.blocked_apply or not smoke_ok,
     )
 
 
